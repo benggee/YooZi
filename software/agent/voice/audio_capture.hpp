@@ -1,0 +1,19 @@
+#pragma once
+
+#include <string>
+
+namespace voice {
+
+class AudioCapture {
+public:
+    virtual ~AudioCapture() {}
+    virtual void start() = 0;
+    virtual void stop() = 0;
+    virtual void flush() = 0;
+    virtual void setMuted(bool muted) = 0;
+    virtual std::string waitForUtterance(int timeout_seconds) = 0;
+    virtual bool hasPendingUtterance() const = 0;
+    virtual void setBargeInMode(bool enabled) = 0;
+};
+
+} // namespace voice
