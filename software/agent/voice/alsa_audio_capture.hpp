@@ -27,8 +27,8 @@ public:
         , barge_in_mode_(false)
         , has_utterance_(false)
         , utterance_counter_(0)
-        , vad_(sample_rate, 1500.0f, 8, 30)
-        , barge_in_vad_(sample_rate, 5000.0f, 15, 30) {}
+        , vad_(sample_rate, 20.0f, 8, 30)
+        , barge_in_vad_(sample_rate, 50.0f, 15, 30) {}
 
     ~AlsaAudioCapture() { stop(); }
 

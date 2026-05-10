@@ -75,7 +75,7 @@ int main() {
         return 1;
     }
 
-    voice::AlsaAudioCapture audio_capture;
+    voice::AlsaAudioCapture audio_capture("plughw:3,0");  // ReSpeaker 2-Mics Pi HAT
     voice::VoiceEngine voice_engine(
         &llm_provider, &registry, &asr, &tts, &audio_capture, workDir);
 

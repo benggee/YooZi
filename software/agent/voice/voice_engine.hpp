@@ -47,7 +47,7 @@ public:
         context_.clear();
         context_.push_back(schema::Message{
             schema::RoleSystem,
-            "你是Mose，一个智能语音助手。你可以使用各种工具帮助用户。"
+            "你是柚子，一个智能语音助手。你可以使用各种工具帮助用户。"
             "回答要简洁自然，适合语音播报，不要有标点符号以外的格式。\n"
             "当你没有专用工具时，应该主动使用bash工具完成任务，例如：\n"
             "- 查天气：curl \"https://wttr.in/城市名?format=3&lang=zh\"\n"
@@ -56,7 +56,7 @@ public:
             {}, {}, ""
         });
 
-        std::cout << "[VoiceEngine] 启动完成。说 \"你好Mose\" 或 \"Mose\" 来唤醒。"
+        std::cout << "[VoiceEngine] 启动完成。说 \"你好柚子\" 或 \"柚子\" 来唤醒。"
                   << std::endl;
 
         audio_capture_->start();
@@ -313,16 +313,20 @@ private:
         std::string lower = text;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-        return lower.find("mose") != std::string::npos ||
-               lower.find("most") != std::string::npos ||
-               lower.find("moss") != std::string::npos ||
-               lower.find("boss") != std::string::npos ||
-               lower.find("bose") != std::string::npos ||
-               lower.find("rose") != std::string::npos ||
-               text.find("摩丝") != std::string::npos ||
-               text.find("莫斯") != std::string::npos ||
-               text.find("摩斯") != std::string::npos ||
-               text.find("帽子") != std::string::npos;
+        // 检查中文唤醒词
+        if (text.find("柚子") != std::string::npos ||
+            text.find("你好柚子") != std::string::npos) {
+            return true;
+        }
+
+        // 检查拼音和发音相似的词
+        if (lower.find("youzi") != std::string::npos ||
+            lower.find("yoz") != std::string::npos ||
+            lower.find("yuz") != std::string::npos) {
+            return true;
+        }
+
+        return false;
     }
 
     provider::LLMProvider* provider_;
