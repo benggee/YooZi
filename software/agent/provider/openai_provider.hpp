@@ -10,6 +10,7 @@
 #include "anthropic/http/http_client.hpp"
 #include "anthropic/error.hpp"
 #include "vendor/nlohmann/json.hpp"
+#include "common/logger.hpp"
 
 namespace provider {
 
@@ -123,12 +124,19 @@ public:
             url += "/chat/completions";
         }
 
+        std::string req_body = body.dump();
+        logger::info("LLM", "Request URL: " + url);
+        logger::info("LLM", "Request body: " + req_body);
+
         std::vector<std::pair<std::string, std::string>> headers;
         headers.push_back({"Content-Type", "application/json"});
         headers.push_back({"Accept", "application/json"});
         headers.push_back({"Authorization", "Bearer " + api_key_});
 
-        anthropic::http::HttpResponse resp = http_client_->post(url, body.dump(), headers);
+        anthropic::http::HttpResponse resp = http_client_->post(url, req_body, headers);
+
+        logger::info("LLM", "Response status: " + std::to_string(resp.status_code));
+        logger::info("LLM", "Response body: " + resp.body);
 
         if (resp.status_code == 0) {
             throw std::runtime_error("Network error: " + resp.body);

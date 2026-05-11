@@ -2,12 +2,12 @@
 
 #include <string>
 #include <vector>
-#include <iostream>
 #include <ctime>
 
 #include "provider/provider.hpp"
 #include "tools/registry.hpp"
 #include "schema/message.hpp"
+#include "common/logger.hpp"
 
 namespace engine {
 
@@ -23,10 +23,8 @@ public:
         , enable_thinking_(enable_thinking) {}
 
     void run(const std::string& user_prompt) {
-        std::cout << "Agent Engine started with [path:" << work_dir_
-                  << "] and prompt: " << user_prompt << std::endl;
-        std::cout << "Agent Engine thinking mode: "
-                  << (enable_thinking_ ? "true" : "false") << std::endl;
+        logger::info("AgentEngine", "started with [path:" + work_dir_ + "] prompt: " + user_prompt);
+        logger::info("AgentEngine", std::string("thinking mode: ") + (enable_thinking_ ? "true" : "false"));
 
         std::vector<schema::Message> context_history;
         context_history.push_back(schema::Message{
@@ -44,59 +42,58 @@ public:
 
         while (true) {
             turn_count++;
-            std::cout << "============[Turn " << turn_count << "] start ============" << std::endl;
+            logger::info("AgentEngine", "============[Turn " + std::to_string(turn_count) + "] start ============");
 
             std::vector<schema::ToolDefinition> available_tools = registry_->get_available_tools();
 
             if (enable_thinking_) {
-                std::cout << "Agent Engine thinking phase (tools disabled)..." << std::endl;
+                logger::info("AgentEngine", "thinking phase (tools disabled)...");
 
                 schema::Message think_resp;
                 try {
                     think_resp = provider_->generate(context_history, std::vector<schema::ToolDefinition>());
                 } catch (const std::exception& e) {
-                    std::cerr << "Thinking phase failed: " << e.what() << std::endl;
+                    logger::error("AgentEngine", std::string("Thinking phase failed: ") + e.what());
                     return;
                 }
 
                 if (!think_resp.content.empty()) {
-                    std::cout << "Thinking trace: " << think_resp.content << std::endl;
+                    logger::info("AgentEngine", "Thinking trace: " + think_resp.content);
                     context_history.push_back(think_resp);
                 }
             }
 
-            std::cout << "Agent Engine action phase (tools enabled)..." << std::endl;
+            logger::info("AgentEngine", "action phase (tools enabled)...");
 
             schema::Message action_resp;
             try {
                 action_resp = provider_->generate(context_history, available_tools);
             } catch (const std::exception& e) {
-                std::cerr << "LLM generation error: " << e.what() << std::endl;
+                logger::error("AgentEngine", std::string("LLM generation error: ") + e.what());
                 return;
             }
 
             context_history.push_back(action_resp);
 
             if (!action_resp.content.empty()) {
-                std::cout << "Provider response: " << action_resp.content << std::endl;
+                logger::info("AgentEngine", "Provider response: " + action_resp.content);
             }
 
             if (action_resp.tool_calls.empty()) {
                 break;
             }
 
-            std::cout << "Model requested " << action_resp.tool_calls.size() << " tool call(s)" << std::endl;
+            logger::info("AgentEngine", "Model requested " + std::to_string(action_resp.tool_calls.size()) + " tool call(s)");
 
             for (const auto& tool_call : action_resp.tool_calls) {
-                std::cout << "Execute tool: " << tool_call.name
-                          << ", Args: " << tool_call.args << std::endl;
+                logger::info("AgentEngine", "Execute tool: " + tool_call.name + " Args: " + tool_call.args);
 
                 schema::ToolResult result = registry_->execute(tool_call);
 
                 if (result.is_error) {
-                    std::cerr << "Tool error: " << result.output << std::endl;
+                    logger::error("AgentEngine", "Tool error: " + result.output);
                 } else {
-                    std::cout << "Tool success, output length: " << result.output.size() << std::endl;
+                    logger::info("AgentEngine", "Tool success, output length: " + std::to_string(result.output.size()));
                 }
 
                 schema::Message observation;

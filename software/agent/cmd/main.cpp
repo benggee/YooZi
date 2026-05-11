@@ -17,19 +17,20 @@
 #include "camera/pi_camera_capture.hpp"
 #include "voice/alsa_audio_capture.hpp"
 #include "voice/voice_engine.hpp"
+#include "common/logger.hpp"
 
 int main() {
-    std::cout << "Hello, Mose!" << std::endl;
+    logger::init("/tmp");
+    logger::info("Main", "Hello, Mose!");
 
     if (!std::getenv("ZHIPU_API_KEY") && !std::getenv("OPENAI_API_KEY")) {
-        std::cerr << "Please set ZHIPU_API_KEY or OPENAI_API_KEY environment variable"
-                  << std::endl;
+        logger::error("Main", "Please set ZHIPU_API_KEY or OPENAI_API_KEY environment variable");
         return 1;
     }
 
     char cwd[4096];
     if (!getcwd(cwd, sizeof(cwd))) {
-        std::cerr << "Failed to get working directory" << std::endl;
+        logger::error("Main", "Failed to get working directory");
         return 1;
     }
     std::string workDir(cwd);
@@ -44,7 +45,7 @@ int main() {
     try {
         alibaba_config = speech::AlibabaConfig::from_env();
     } catch (const std::exception& e) {
-        std::cerr << "Warning: " << e.what() << " (speech tools disabled)" << std::endl;
+        logger::warn("Main", std::string(e.what()) + " (speech tools disabled)");
         has_speech = false;
     }
 
@@ -71,7 +72,7 @@ int main() {
     }
 
     if (!has_speech) {
-        std::cerr << "Cannot start voice engine without speech services" << std::endl;
+        logger::error("Main", "Cannot start voice engine without speech services");
         return 1;
     }
 
@@ -82,10 +83,10 @@ int main() {
     try {
         voice_engine.start();
     } catch (const std::exception& e) {
-        std::cerr << "VoiceEngine crashed: " << e.what() << std::endl;
+        logger::error("Main", std::string("VoiceEngine crashed: ") + e.what());
         return 1;
     }
 
-    std::cout << "Mose Finished." << std::endl;
+    logger::info("Main", "Mose Finished.");
     return 0;
 }

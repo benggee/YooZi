@@ -7,6 +7,7 @@
 #include <sstream>
 #include "tools/base_tool.hpp"
 #include "schema/message.hpp"
+#include "common/logger.hpp"
 
 namespace tools {
 
@@ -15,10 +16,10 @@ public:
     void registry(BaseTool* tool) {
         std::string n = tool->name();
         if (tools_.find(n) != tools_.end()) {
-            std::cerr << "[Warning] tool: " << n << " is already registered" << std::endl;
+            logger::warn("Registry", "tool already registered: " + n);
         }
         tools_[n] = tool;
-        std::cout << "[Registry] tool registered: " << n << std::endl;
+        logger::info("Registry", "tool registered: " + n);
     }
 
     std::vector<schema::ToolDefinition> get_available_tools() const {
@@ -32,19 +33,24 @@ public:
     schema::ToolResult execute(const schema::ToolCall& call) {
         auto it = tools_.find(call.name);
         if (it == tools_.end()) {
-            std::ostringstream oss;
-            oss << "Error: tool not found: " << call.name;
-            return schema::ToolResult{call.id, oss.str(), true};
+            std::string err = "Error: tool not found: " + call.name;
+            logger::error("Tool", err);
+            return schema::ToolResult{call.id, err, true};
         }
+
+        logger::info("Tool", "executing: " + call.name + " args: " + call.args);
 
         std::string output;
         try {
             output = it->second->execute(call.args);
         } catch (const std::exception& e) {
-            std::ostringstream oss;
-            oss << "Error executing " << call.name << ": " << e.what();
-            return schema::ToolResult{call.id, oss.str(), true};
+            std::string err = std::string("Error executing ") + call.name + ": " + e.what();
+            logger::error("Tool", err);
+            return schema::ToolResult{call.id, err, true};
         }
+
+        logger::info("Tool", "result: " + call.name + " output_length: " + std::to_string(output.size()));
+        logger::debug("Tool", "result: " + call.name + " output: " + output);
 
         return schema::ToolResult{call.id, output, false};
     }

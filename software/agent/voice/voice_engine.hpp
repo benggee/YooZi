@@ -3,7 +3,6 @@
 #include <string>
 #include <vector>
 #include <ctime>
-#include <iostream>
 #include <algorithm>
 #include <cstdlib>
 
@@ -19,6 +18,7 @@
 #include "voice/audio_capture.hpp"
 #include "schema/message.hpp"
 #include "vendor/nlohmann/json.hpp"
+#include "common/logger.hpp"
 
 namespace voice {
 
@@ -56,15 +56,14 @@ public:
             {}, {}, ""
         });
 
-        std::cout << "[VoiceEngine] 启动完成。说 \"你好柚子\" 或 \"柚子\" 来唤醒。"
-                  << std::endl;
+        logger::info("VoiceEngine", "启动完成。说 \"你好柚子\" 或 \"柚子\" 来唤醒。");
 
         audio_capture_->start();
 
         try {
             runLoop();
         } catch (const std::exception& e) {
-            std::cerr << "[VoiceEngine] 异常: " << e.what() << std::endl;
+            logger::error("VoiceEngine", std::string("异常: ") + e.what());
         }
 
         audio_capture_->stop();
@@ -89,7 +88,7 @@ private:
     }
 
     void sleepLoop() {
-        std::cout << "[VoiceEngine] 休眠中，等待唤醒词..." << std::endl;
+        logger::info("VoiceEngine", "休眠中，等待唤醒词...");
 
         while (running_ && state_ == SLEEPING) {
             std::string wav = audio_capture_->waitForUtterance(0);
@@ -98,14 +97,14 @@ private:
 
             speech::RecognitionResult asr = recognizer_->recognize(wav, "wav", 16000);
             if (!asr.success) {
-                std::cerr << "[VoiceEngine] ASR错误: " << asr.error_message << std::endl;
+                logger::error("VoiceEngine", "ASR错误: " + asr.error_message);
                 continue;
             }
 
-            std::cout << "[VoiceEngine] 听到: " << asr.text << std::endl;
+            logger::info("VoiceEngine", "听到: " + asr.text);
 
             if (containsWakeWord(asr.text)) {
-                std::cout << "[VoiceEngine] 唤醒成功！" << std::endl;
+                logger::info("VoiceEngine", "唤醒成功！");
                 state_ = AWAKE;
                 last_activity_ = std::time(nullptr);
 
@@ -118,13 +117,13 @@ private:
     }
 
     void awakeLoop() {
-        std::cout << "[VoiceEngine] 已唤醒，正在监听..." << std::endl;
+        logger::info("VoiceEngine", "已唤醒，正在监听...");
 
         while (running_ && state_ == AWAKE) {
             int remaining = AWAKE_TIMEOUT_SECONDS
                 - static_cast<int>(std::time(nullptr) - last_activity_);
             if (remaining <= 0) {
-                std::cout << "[VoiceEngine] 超时，进入休眠。" << std::endl;
+                logger::info("VoiceEngine", "超时，进入休眠。");
                 speak("我先休息一下，需要的时候再叫我");
                 state_ = SLEEPING;
                 break;
@@ -134,7 +133,7 @@ private:
             if (!running_) break;
 
             if (wav.empty()) {
-                std::cout << "[VoiceEngine] 2分钟无对话，进入休眠。" << std::endl;
+                logger::info("VoiceEngine", "2分钟无对话，进入休眠。");
                 speak("我先休息一下，需要的时候再叫我");
                 state_ = SLEEPING;
                 break;
@@ -144,14 +143,14 @@ private:
 
             speech::RecognitionResult asr = recognizer_->recognize(wav, "wav", 16000);
             if (!asr.success) {
-                std::cerr << "[VoiceEngine] ASR错误: " << asr.error_message << std::endl;
+                logger::error("VoiceEngine", "ASR错误: " + asr.error_message);
                 continue;
             }
 
             std::string user_text = asr.text;
             if (user_text.empty()) continue;
 
-            std::cout << "[VoiceEngine] 用户: " << user_text << std::endl;
+            logger::info("VoiceEngine", "用户: " + user_text);
 
             context_.push_back(schema::Message{
                 schema::RoleUser, user_text, {}, {}, ""
@@ -159,7 +158,7 @@ private:
 
             std::string response = runAgentTurn();
             if (!response.empty()) {
-                std::cout << "[VoiceEngine] Mose: " << response << std::endl;
+                logger::info("VoiceEngine", "Mose: " + response);
                 speak(response);
             }
         }
@@ -171,13 +170,15 @@ private:
         int max_turns = 10;
 
         for (int turn = 0; turn < max_turns; turn++) {
+            logger::info("VoiceEngine", "Agent turn " + std::to_string(turn + 1) + " start");
+
             pruneVisionContext();
 
             schema::Message resp;
             try {
                 resp = provider_->generate(context_, tools);
             } catch (const std::exception& e) {
-                std::cerr << "[VoiceEngine] LLM错误: " << e.what() << std::endl;
+                logger::error("VoiceEngine", "LLM错误: " + std::string(e.what()));
                 return "抱歉，我遇到了一些问题";
             }
 
@@ -188,13 +189,17 @@ private:
                 break;
             }
 
-            std::cout << "[VoiceEngine] 执行 " << resp.tool_calls.size()
-                      << " 个工具..." << std::endl;
+            logger::info("VoiceEngine", "执行 " + std::to_string(resp.tool_calls.size()) + " 个工具...");
 
             for (const auto& tc : resp.tool_calls) {
-                std::cout << "[VoiceEngine] 工具: " << tc.name
-                          << " 参数: " << tc.args << std::endl;
+                logger::info("VoiceEngine", "工具: " + tc.name + " 参数: " + tc.args);
                 schema::ToolResult result = registry_->execute(tc);
+
+                if (result.is_error) {
+                    logger::error("VoiceEngine", "工具执行失败: " + tc.name + " " + result.output);
+                } else {
+                    logger::info("VoiceEngine", "工具执行成功: " + tc.name);
+                }
 
                 schema::Message obs;
                 obs.role = schema::RoleUser;
@@ -219,7 +224,7 @@ private:
                             context_.push_back(vision_msg);
                         }
                     } catch (const std::exception& e) {
-                        std::cerr << "[VoiceEngine] 解析相机结果失败: " << e.what() << std::endl;
+                        logger::error("VoiceEngine", std::string("解析相机结果失败: ") + e.what());
                     }
                 }
             }
@@ -263,7 +268,7 @@ private:
             text, out, "wav", 16000, "zhimiao_emo");
 
         if (!result.success) {
-            std::cerr << "[VoiceEngine] TTS错误: " << result.error_message << std::endl;
+            logger::error("VoiceEngine", "TTS错误: " + result.error_message);
             return;
         }
 
@@ -280,7 +285,7 @@ private:
         }
 
         if (aplay_pid < 0) {
-            std::cerr << "[VoiceEngine] aplay fork失败" << std::endl;
+            logger::error("VoiceEngine", "aplay fork失败");
             audio_capture_->setBargeInMode(false);
             return;
         }
@@ -292,7 +297,7 @@ private:
             if (ret > 0) break;
 
             if (audio_capture_->hasPendingUtterance()) {
-                std::cout << "[VoiceEngine] 用户打断，停止播放" << std::endl;
+                logger::info("VoiceEngine", "用户打断，停止播放");
                 kill(aplay_pid, SIGKILL);
                 waitpid(aplay_pid, &status, 0);
                 interrupted = true;

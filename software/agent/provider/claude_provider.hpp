@@ -8,6 +8,7 @@
 #include "schema/message.hpp"
 #include "provider/provider.hpp"
 #include "anthropic/anthropic.hpp"
+#include "common/logger.hpp"
 
 namespace provider {
 
@@ -127,6 +128,10 @@ public:
             params.tools = anthropic_tools;
         }
 
+        logger::info("LLM", "Claude request model: " + model_);
+        logger::info("LLM", "Claude request messages count: " + std::to_string(anthropic_msgs.size()));
+        logger::info("LLM", "Claude request tools count: " + std::to_string(anthropic_tools.size()));
+
         // Execute
         anthropic::Message resp = client_->messages().New(params);
 
@@ -144,6 +149,11 @@ public:
                     block.input.dump()
                 });
             }
+        }
+
+        logger::info("LLM", "Claude response text: " + result.content);
+        for (const auto& tc : result.tool_calls) {
+            logger::info("LLM", "Claude response tool_call: " + tc.name + " args: " + tc.args);
         }
 
         return result;
