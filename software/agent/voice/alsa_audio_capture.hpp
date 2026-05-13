@@ -34,7 +34,7 @@ public:
         , has_utterance_(false)
         , utterance_counter_(0)
         , vad_(sample_rate, 1500.0f, 15, 30)
-        , barge_in_vad_(sample_rate, 4000.0f, 15, 30)
+        , barge_in_vad_(sample_rate, 2000.0f, 8, 10)
         , echo_state_(nullptr)
         , preprocess_state_(nullptr)
         , aec_enabled_(true)
@@ -54,7 +54,7 @@ public:
         running_ = true;
         muted_ = false;
         barge_in_mode_ = false;
-        has_utterance_ = false;
+        has_utterance_.store(false);
         playback_active_ = false;
         playback_complete_ = true;
         vad_.reset();
@@ -85,7 +85,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         vad_.reset();
         barge_in_vad_.reset();
-        has_utterance_ = false;
+        has_utterance_.store(false);
         pending_wav_.clear();
     }
 
@@ -144,26 +144,26 @@ public:
     std::string waitForUtterance(int timeout_seconds) override {
         std::unique_lock<std::mutex> lock(mutex_);
         if (timeout_seconds <= 0) {
-            cv_.wait(lock, [this] { return has_utterance_ || !running_; });
+            cv_.wait(lock, [this] { return has_utterance_.load() || !running_; });
         } else {
             cv_.wait_for(lock, std::chrono::seconds(timeout_seconds),
-                         [this] { return has_utterance_ || !running_; });
+                         [this] { return has_utterance_.load() || !running_; });
         }
-        if (has_utterance_) {
-            has_utterance_ = false;
+        if (has_utterance_.load()) {
+            has_utterance_.store(false);
             return pending_wav_;
         }
         return "";
     }
 
     bool hasPendingUtterance() const override {
-        return has_utterance_;
+        return has_utterance_.load();
     }
 
     std::string getPendingWav() override {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (has_utterance_) {
-            has_utterance_ = false;
+        if (has_utterance_.load()) {
+            has_utterance_.store(false);
             return pending_wav_;
         }
         return "";
@@ -280,17 +280,31 @@ private:
             std::lock_guard<std::mutex> lock(mutex_);
 
             if (barge_in_mode_) {
-                barge_in_vad_.process(processed_buf, frames);
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - playback_start_time_).count();
+                if (elapsed >= 500) {
+                    barge_in_vad_.process(processed_buf, frames);
 
-                if (barge_in_vad_.speech_ended()) {
-                    std::vector<int16_t> audio = barge_in_vad_.take_buffer();
-                    if (audio.size() > 12800) {
+                    if (barge_in_vad_.speech_ended()) {
+                        std::vector<int16_t> audio = barge_in_vad_.take_buffer();
+                        if (audio.size() > 3200) {
+                            utterance_counter_++;
+                            std::string path = "/tmp/mose_barge_"
+                                + std::to_string(utterance_counter_) + ".wav";
+                            write_wav(path, audio, sample_rate_);
+                            pending_wav_ = path;
+                            has_utterance_.store(true);
+                            cv_.notify_one();
+                        }
+                    } else if (barge_in_vad_.is_speaking() && barge_in_vad_.buffer().size() > 80000) {
+                        // 最大时长保护：5秒后强制截断保存
+                        std::vector<int16_t> audio = barge_in_vad_.take_buffer();
                         utterance_counter_++;
                         std::string path = "/tmp/mose_barge_"
                             + std::to_string(utterance_counter_) + ".wav";
                         write_wav(path, audio, sample_rate_);
                         pending_wav_ = path;
-                        has_utterance_ = true;
+                        has_utterance_.store(true);
                         cv_.notify_one();
                     }
                 }
@@ -305,7 +319,7 @@ private:
                             + std::to_string(utterance_counter_) + ".wav";
                         write_wav(path, audio, sample_rate_);
                         pending_wav_ = path;
-                        has_utterance_ = true;
+                        has_utterance_.store(true);
                         cv_.notify_one();
                     }
                 }
@@ -375,6 +389,7 @@ private:
         echo_read_pos_.store(0);
 
         playback_active_.store(true);
+        playback_start_time_ = std::chrono::steady_clock::now();
         playback_complete_.store(false);
 
         const int chunk = 160;  // 10ms at 16kHz
@@ -438,7 +453,7 @@ private:
     VoiceActivityDetector vad_;
     VoiceActivityDetector barge_in_vad_;
     std::string pending_wav_;
-    bool has_utterance_;
+    std::atomic<bool> has_utterance_;
     int utterance_counter_;
 
     // AEC components
@@ -456,6 +471,7 @@ private:
     std::thread playback_thread_;
     std::atomic<bool> playback_active_;
     std::atomic<bool> playback_complete_;
+    std::chrono::steady_clock::time_point playback_start_time_;
 
     std::thread capture_thread_;
 };

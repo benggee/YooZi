@@ -154,6 +154,14 @@ private:
             std::string user_text = asr.text;
             if (user_text.empty()) continue;
 
+            // 检查退出词
+            if (containsExitWord(user_text)) {
+                logger::info("VoiceEngine", "用户退出: " + user_text);
+                speak("好的，需要的时候再叫我");
+                state_ = SLEEPING;
+                break;
+            }
+
             logger::info("VoiceEngine", "用户: " + user_text);
 
             context_.push_back(schema::Message{
@@ -164,9 +172,25 @@ private:
             if (!response.empty()) {
                 logger::info("VoiceEngine", "Mose: " + response);
                 std::string user_text = speak(response);
+                // speak() 已做 flush + 800ms 等待，再 flush 一次丢弃残留
+                audio_capture_->flush();
                 while (!user_text.empty()) {
-                    logger::info("VoiceEngine", "用户(打断): " + user_text);
-                    context_.push_back(schema::Message{schema::RoleUser, user_text, {}, {}, ""});
+                    // 打断后检查退出词
+                    if (containsExitWord(user_text)) {
+                        logger::info("VoiceEngine", "打断后退出: " + user_text);
+                        speak("好的，需要的时候再叫我");
+                        state_ = SLEEPING;
+                        break;
+                    }
+                    // 剥离打断词，检查是否有实际内容
+                    std::string remaining = stripBargeInWords(user_text);
+                    if (remaining.empty()) {
+                        // 只有打断词，等待用户继续说
+                        logger::info("VoiceEngine", "打断词无内容，等待用户继续");
+                        break;
+                    }
+                    logger::info("VoiceEngine", "用户(打断): " + remaining);
+                    context_.push_back(schema::Message{schema::RoleUser, remaining, {}, {}, ""});
                     std::string response2 = runAgentTurn();
                     if (!response2.empty()) {
                         response = response2;
@@ -302,24 +326,18 @@ private:
             if (audio_capture_->hasPendingUtterance()) {
                 std::string wav = audio_capture_->getPendingWav();
 
-                // ASR the barge-in audio before deciding whether to stop playback
+                // ASR the barge-in audio
                 speech::RecognitionResult asr = recognizer_->recognize(wav, "wav", 16000);
                 if (asr.success && !asr.text.empty()) {
-                    // Echo check: substring match + character overlap
-                    if (text.find(asr.text) != std::string::npos ||
-                        isEchoText(asr.text, text)) {
-                        logger::info("VoiceEngine", "忽略回声: " + asr.text);
-                        // Reset VAD, continue playing
-                        audio_capture_->setBargeInMode(true);
-                        continue;
+                    if (containsBargeInWord(asr.text) || containsExitWord(asr.text)) {
+                        logger::info("VoiceEngine", "用户打断: " + asr.text);
+                        audio_capture_->stopPlayback();
+                        user_text = asr.text;
+                        break;
                     }
-                    // Real user interruption
-                    logger::info("VoiceEngine", "用户打断: " + asr.text);
-                    audio_capture_->stopPlayback();
-                    user_text = asr.text;
-                    break;
+                    // 非关键词 → 忽略（可能是回声），继续播放
+                    logger::info("VoiceEngine", "播放中忽略: " + asr.text);
                 }
-                // ASR failed or empty → ignore, continue playing
                 audio_capture_->setBargeInMode(true);
             }
 
@@ -328,32 +346,38 @@ private:
 
         audio_capture_->setBargeInMode(false);
         audio_capture_->flush();
-        usleep(500000); // 500ms for echo to dissipate
+        usleep(800000); // 800ms — 等待回声完全消散
 
         return user_text;
     }
 
-    // 检查 asr_text 是否是 tts_text 的回声（ASR 字符中 > 70% 出现在 TTS 中）
-    bool isEchoText(const std::string& asr_text, const std::string& tts_text) {
-        if (asr_text.empty() || tts_text.empty()) return false;
-        int match_chars = 0;
-        int asr_chars = 0;
-        for (size_t i = 0; i < asr_text.size(); ) {
-            size_t char_len = 1;
-            if ((asr_text[i] & 0x80) != 0) {
-                if ((asr_text[i] & 0xE0) == 0xC0) char_len = 2;
-                else if ((asr_text[i] & 0xF0) == 0xE0) char_len = 3;
-                else if ((asr_text[i] & 0xF8) == 0xF0) char_len = 4;
+    bool containsBargeInWord(const std::string& text) {
+        return text.find("你好柚子") != std::string::npos ||
+               text.find("柚子") != std::string::npos ||
+               text.find("停下") != std::string::npos;
+    }
+
+    bool containsExitWord(const std::string& text) {
+        return text.find("停止") != std::string::npos ||
+               text.find("退下") != std::string::npos ||
+               text.find("退出") != std::string::npos ||
+               text.find("滚蛋") != std::string::npos;
+    }
+
+    std::string stripBargeInWords(const std::string& text) {
+        std::string remaining = text;
+        const char* keywords[] = {"你好柚子", "柚子", "停下"};
+        for (auto& kw : keywords) {
+            size_t pos;
+            while ((pos = remaining.find(kw)) != std::string::npos) {
+                remaining.erase(pos, strlen(kw));
             }
-            std::string ch = asr_text.substr(i, char_len);
-            if (tts_text.find(ch) != std::string::npos) {
-                match_chars++;
-            }
-            asr_chars++;
-            i += char_len;
         }
-        // ASR 字符中 > 70% 出现在 TTS 中，视为回声
-        return asr_chars > 0 && (float)match_chars / asr_chars > 0.7f;
+        // trim spaces
+        size_t start = remaining.find_first_not_of(" \t\n");
+        if (start == std::string::npos) return "";
+        size_t end = remaining.find_last_not_of(" \t\n");
+        return remaining.substr(start, end - start + 1);
     }
 
     bool containsWakeWord(const std::string& text) {
