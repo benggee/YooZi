@@ -87,7 +87,8 @@ private:
     }
 
     void play_audio(const std::string& file_path) {
-        std::string cmd = "aplay -D card3 \"" + file_path + "\"";
+        // 使用与语音引擎相同的播放设备: plughw:3,0 (ReSpeaker 2-Mics Pi HAT)
+        std::string cmd = "aplay -D plughw:3,0 \"" + file_path + "\"";
         int ret = std::system(cmd.c_str());
         if (ret != 0) {
             throw std::runtime_error("Audio playback failed with code: " + std::to_string(ret));

@@ -21,7 +21,7 @@
 
 int main() {
     logger::init("/tmp");
-    logger::info("Main", "Hello, Mose!");
+    logger::info("Main", "Hello, YooZi!");
 
     if (!std::getenv("ZHIPU_API_KEY") && !std::getenv("OPENAI_API_KEY")) {
         logger::error("Main", "Please set ZHIPU_API_KEY or OPENAI_API_KEY environment variable");
