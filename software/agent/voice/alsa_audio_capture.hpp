@@ -30,8 +30,8 @@ public:
         , barge_in_mode_(false)
         , has_utterance_(false)
         , utterance_counter_(0)
-        , vad_(sample_rate, 800.0f, 8, 30)
-        , barge_in_vad_(sample_rate, 2000.0f, 15, 50)
+        , vad_(sample_rate, 1200.0f, 10, 35)
+        , barge_in_vad_(sample_rate, 1000.0f, 10, 40)
         , echo_state_(nullptr)
         , preprocess_state_(nullptr)
         , aec_enabled_(true)  // 默认启用AEC
@@ -89,7 +89,9 @@ public:
 
     void setBargeInMode(bool enabled) override {
         barge_in_mode_ = enabled;
-        flush();
+        // 重置 barge-in VAD，但不清除正常 utterance
+        barge_in_vad_.reset();
+        // 不再重置 AEC 状态，避免与 capture 线程冲突导致内存损坏
     }
 
     void setEchoCancellation(bool enabled) override {
@@ -144,6 +146,7 @@ private:
         echo_state_ = speex_echo_state_init(frame_size_, filter_length);
         speex_echo_ctl(echo_state_, SPEEX_ECHO_SET_SAMPLING_RATE, &sample_rate_);
 
+        // 注意：回声抑制参数需要通过 preprocessor 设置，这里暂不使用
         // Initialize preprocessing (optional)
         // preprocess_state_ = speex_preprocess_state_init(frame_size_, sample_rate_);
         // if (preprocess_state_) {
@@ -328,9 +331,7 @@ private:
     }
 
     void provideEchoReference(const std::vector<int16_t>& audio_data) {
-        // 等待aplay启动并播放一小段时间，确保参考信号与实际播放同步
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
+        // 立即开始提供参考信号，与 aplay 同步
         int pos = 0;
         while (pos < audio_data.size() && running_ && !playback_source_.empty()) {
             int frames = std::min(frame_size_, (int)audio_data.size() - pos);

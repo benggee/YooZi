@@ -105,13 +105,20 @@ private:
 
             if (containsWakeWord(asr.text)) {
                 logger::info("VoiceEngine", "唤醒成功！");
-                state_ = AWAKE;
-                last_activity_ = std::time(nullptr);
 
                 // Reset conversation for new session
                 context_.erase(context_.begin() + 1, context_.end());
 
+                // 先播放确认音，然后再切换状态
                 speak("我在，请说");
+
+                // 等待回声消散
+                usleep(500000); // 500ms
+
+                // 切换到 AWAKE 状态并刷新 VAD
+                audio_capture_->flush();
+                state_ = AWAKE;
+                last_activity_ = std::time(nullptr);
             }
         }
     }
@@ -272,12 +279,7 @@ private:
             return;
         }
 
-        // AEC默认始终启用，不需要动态启用
-        audio_capture_->setPlaybackSource(result.output_file_path);
-
-        // 切换到高阈值 barge-in 模式，过滤环境音和回声
-        audio_capture_->setBargeInMode(true);
-
+        // 先启动 aplay，再设置 AEC 参考信号，确保时序同步
         pid_t aplay_pid = fork();
         if (aplay_pid == 0) {
             close(STDOUT_FILENO);
@@ -292,6 +294,15 @@ private:
             audio_capture_->setBargeInMode(false);
             return;
         }
+
+        // 确保 aplay 已经启动
+        usleep(50000); // 等待 50ms
+
+        // 切换到高阈值 barge-in 模式，过滤环境音和回声
+        audio_capture_->setBargeInMode(true);
+
+        // 在 aplay 启动后才提供参考信号
+        audio_capture_->setPlaybackSource(result.output_file_path);
 
         bool interrupted = false;
         while (true) {
@@ -315,6 +326,9 @@ private:
         if (!interrupted) {
             audio_capture_->flush();
         }
+
+        // 等待回声消散，避免误识别
+        usleep(500000); // 500ms
     }
 
     bool containsWakeWord(const std::string& text) {
