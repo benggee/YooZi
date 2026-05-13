@@ -14,6 +14,7 @@
 #include "speech/speech_synthesizer.hpp"
 #include "voice/audio_capture.hpp"
 #include "schema/message.hpp"
+#include "context/composer.hpp"
 #include "vendor/nlohmann/json.hpp"
 #include "common/logger.hpp"
 
@@ -37,21 +38,22 @@ public:
         , work_dir_(work_dir)
         , state_(SLEEPING)
         , running_(false)
-        , last_activity_(0) {}
+        , last_activity_(0)
+        , composer_(new context::PromptComposer(work_dir)) {}
+
+    ~VoiceEngine() {
+        delete composer_;
+    }
 
     void start() {
         running_ = true;
         context_.clear();
-        context_.push_back(schema::Message{
-            schema::RoleSystem,
-            "你是柚子，一个智能语音助手。你可以使用各种工具帮助用户。"
-            "回答要简洁自然，适合语音播报，不要有标点符号以外的格式。\n"
-            "当你没有专用工具时，应该主动使用bash工具完成任务，例如：\n"
-            "- 查天气：curl \"https://wttr.in/城市名?format=3&lang=zh\"\n"
-            "- 查IP、网络诊断、系统信息等都可以用bash执行\n"
-            "始终优先使用工具获取实时信息，不要编造数据。",
-            {}, {}, ""
-        });
+
+        schema::Message sys = composer_->build();
+        sys.content += "\n\n## 语音模式专属指南\n"
+            "当前为语音对话模式，回答要简洁自然，适合语音播报，不要使用 Markdown 格式。\n"
+            "始终优先使用工具获取实时信息，不要编造数据。\n";
+        context_.push_back(sys);
 
         logger::info("VoiceEngine", "启动完成。说 \"你好柚子\" 或 \"柚子\" 来唤醒。");
 
@@ -411,6 +413,7 @@ private:
     bool running_;
     std::time_t last_activity_;
     std::vector<schema::Message> context_;
+    context::PromptComposer* composer_;
 };
 
 } // namespace voice

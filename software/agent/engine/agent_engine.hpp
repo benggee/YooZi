@@ -7,6 +7,8 @@
 #include "provider/provider.hpp"
 #include "tools/registry.hpp"
 #include "schema/message.hpp"
+#include "engine/reporter.hpp"
+#include "context/composer.hpp"
 #include "common/logger.hpp"
 
 namespace engine {
@@ -16,22 +18,25 @@ public:
     AgentEngine(provider::LLMProvider* p,
                 tools::Registry* r,
                 const std::string& work_dir,
-                bool enable_thinking)
+                bool enable_thinking,
+                Reporter* reporter = nullptr)
         : provider_(p)
         , registry_(r)
         , work_dir_(work_dir)
-        , enable_thinking_(enable_thinking) {}
+        , enable_thinking_(enable_thinking)
+        , reporter_(reporter)
+        , composer_(new context::PromptComposer(work_dir)) {}
+
+    ~AgentEngine() {
+        delete composer_;
+    }
 
     void run(const std::string& user_prompt) {
         logger::info("AgentEngine", "started with [path:" + work_dir_ + "] prompt: " + user_prompt);
         logger::info("AgentEngine", std::string("thinking mode: ") + (enable_thinking_ ? "true" : "false"));
 
         std::vector<schema::Message> context_history;
-        context_history.push_back(schema::Message{
-            schema::RoleSystem,
-            "You are YooZ, an expert coding assistant. You have full access to tools in the workspace.",
-            {}, ""
-        });
+        context_history.push_back(composer_->build());
         context_history.push_back(schema::Message{
             schema::RoleUser,
             user_prompt,
@@ -47,6 +52,8 @@ public:
             std::vector<schema::ToolDefinition> available_tools = registry_->get_available_tools();
 
             if (enable_thinking_) {
+                if (reporter_) reporter_->onThinking();
+
                 logger::info("AgentEngine", "thinking phase (tools disabled)...");
 
                 schema::Message think_resp;
@@ -77,6 +84,7 @@ public:
 
             if (!action_resp.content.empty()) {
                 logger::info("AgentEngine", "Provider response: " + action_resp.content);
+                if (reporter_) reporter_->onMessage(action_resp.content);
             }
 
             if (action_resp.tool_calls.empty()) {
@@ -86,9 +94,19 @@ public:
             logger::info("AgentEngine", "Model requested " + std::to_string(action_resp.tool_calls.size()) + " tool call(s)");
 
             for (const auto& tool_call : action_resp.tool_calls) {
+                if (reporter_) reporter_->onToolCall(tool_call.name, tool_call.args);
+
                 logger::info("AgentEngine", "Execute tool: " + tool_call.name + " Args: " + tool_call.args);
 
                 schema::ToolResult result = registry_->execute(tool_call);
+
+                if (reporter_) {
+                    std::string display = result.output;
+                    if (display.size() > 200) {
+                        display = display.substr(0, 200) + "...(truncated)";
+                    }
+                    reporter_->onToolResult(tool_call.name, display, result.is_error);
+                }
 
                 if (result.is_error) {
                     logger::error("AgentEngine", "Tool error: " + result.output);
@@ -110,6 +128,8 @@ private:
     tools::Registry* registry_;
     std::string work_dir_;
     bool enable_thinking_;
+    Reporter* reporter_;
+    context::PromptComposer* composer_;
 };
 
 } // namespace engine
