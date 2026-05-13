@@ -272,6 +272,9 @@ private:
             return;
         }
 
+        // AEC默认始终启用，不需要动态启用
+        audio_capture_->setPlaybackSource(result.output_file_path);
+
         // 切换到高阈值 barge-in 模式，过滤环境音和回声
         audio_capture_->setBargeInMode(true);
 

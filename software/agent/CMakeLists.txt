@@ -13,9 +13,14 @@ target_include_directories(yoozi PRIVATE
 
 find_package(CURL REQUIRED)
 find_package(ALSA REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SPEEXDSP REQUIRED speexdsp)
+
 target_link_libraries(yoozi PRIVATE
     CURL::libcurl
     ${ALSA_LIBRARIES}
+    ${SPEEXDSP_LIBRARIES}
     pthread
 )
+target_include_directories(yoozi PRIVATE ${SPEEXDSP_INCLUDE_DIRS})
 target_include_directories(yoozi PRIVATE ${ALSA_INCLUDE_DIRS})
