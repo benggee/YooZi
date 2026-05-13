@@ -20,7 +20,8 @@ public:
         , speech_ended_(false)
         , consecutive_speech_(0)
         , consecutive_silence_(0)
-        , frame_size_(sample_rate / 100) {}
+        , frame_size_(sample_rate / 100)
+        , pre_buffer_() {}
 
     void process(const int16_t* samples, size_t count) {
         speech_ended_ = false;
@@ -28,6 +29,15 @@ public:
         size_t offset = 0;
         while (offset + frame_size_ <= count) {
             float energy = calcEnergy(samples + offset, frame_size_);
+
+            // Update pre-buffer with every frame (regardless of energy)
+            pre_buffer_.insert(pre_buffer_.end(),
+                samples + offset, samples + offset + frame_size_);
+            if ((int)pre_buffer_.size() > PRE_BUFFER_FRAMES * frame_size_) {
+                pre_buffer_.erase(pre_buffer_.begin(),
+                    pre_buffer_.begin() + frame_size_);
+            }
+
             offset += frame_size_;
 
             if (energy > energy_threshold_) {
@@ -40,6 +50,15 @@ public:
 
             if (!speaking_ && consecutive_speech_ >= speech_start_frames_) {
                 speaking_ = true;
+                // Prepend pre-buffer frames not already captured by buffer_
+                int pre_frame_count = (int)pre_buffer_.size() / frame_size_;
+                int already_buffered = std::min(consecutive_speech_, pre_frame_count);
+                int extra = pre_frame_count - already_buffered;
+                if (extra > 0) {
+                    buffer_.insert(buffer_.begin(),
+                        pre_buffer_.begin(),
+                        pre_buffer_.begin() + extra * frame_size_);
+                }
             }
 
             if (speaking_ && consecutive_silence_ >= speech_end_frames_) {
@@ -69,6 +88,7 @@ public:
 
     void reset() {
         buffer_.clear();
+        pre_buffer_.clear();
         speaking_ = false;
         speech_ended_ = false;
         consecutive_speech_ = 0;
@@ -95,6 +115,8 @@ private:
     int consecutive_silence_;
     int frame_size_;
     std::vector<int16_t> buffer_;
+    static const int PRE_BUFFER_FRAMES = 15; // 150ms pre-buffer
+    std::vector<int16_t> pre_buffer_;
 };
 
 } // namespace voice

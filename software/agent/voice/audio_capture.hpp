@@ -17,6 +17,10 @@ public:
     virtual void setEchoCancellation(bool enabled) = 0;
     virtual void writeEchoReference(const int16_t* data, int frames) = 0;
     virtual void setPlaybackSource(const std::string& wav_path) = 0;
+    virtual std::string getPendingWav() = 0;
+    virtual bool isPlaybackComplete() const = 0;
+    virtual void stopPlayback() = 0;
+    virtual void setPlaybackDevice(const std::string& device) = 0;
 };
 
 } // namespace voice

@@ -7,9 +7,6 @@
 #include <cstdlib>
 
 #include <unistd.h>
-#include <sys/wait.h>
-#include <sys/types.h>
-#include <signal.h>
 
 #include "provider/provider.hpp"
 #include "tools/registry.hpp"
@@ -166,7 +163,19 @@ private:
             std::string response = runAgentTurn();
             if (!response.empty()) {
                 logger::info("VoiceEngine", "Mose: " + response);
-                speak(response);
+                std::string user_text = speak(response);
+                while (!user_text.empty()) {
+                    logger::info("VoiceEngine", "用户(打断): " + user_text);
+                    context_.push_back(schema::Message{schema::RoleUser, user_text, {}, {}, ""});
+                    std::string response2 = runAgentTurn();
+                    if (!response2.empty()) {
+                        response = response2;
+                        logger::info("VoiceEngine", "Mose: " + response2);
+                        user_text = speak(response2);
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -263,8 +272,9 @@ private:
         }
     }
 
-    void speak(const std::string& text) {
-        if (text.empty()) return;
+    // Returns user_text if real barge-in detected, empty string if playback completed normally
+    std::string speak(const std::string& text) {
+        if (text.empty()) return "";
 
         std::time_t now = std::time(nullptr);
         char buf[64];
@@ -276,59 +286,74 @@ private:
 
         if (!result.success) {
             logger::error("VoiceEngine", "TTS错误: " + result.error_message);
-            return;
+            return "";
         }
 
-        // 先启动 aplay，再设置 AEC 参考信号，确保时序同步
-        pid_t aplay_pid = fork();
-        if (aplay_pid == 0) {
-            close(STDOUT_FILENO);
-            close(STDERR_FILENO);
-            execlp("aplay", "aplay", "-D", "plughw:3,0",
-                   result.output_file_path.c_str(), (char*)NULL);
-            _exit(127);
-        }
+        // Trigger direct ALSA playback + synchronized echo reference
+        audio_capture_->setPlaybackSource(result.output_file_path);
+        usleep(30000);  // Wait 30ms for playbackLoop to start
 
-        if (aplay_pid < 0) {
-            logger::error("VoiceEngine", "aplay fork失败");
-            audio_capture_->setBargeInMode(false);
-            return;
-        }
-
-        // 确保 aplay 已经启动
-        usleep(50000); // 等待 50ms
-
-        // 切换到高阈值 barge-in 模式，过滤环境音和回声
         audio_capture_->setBargeInMode(true);
 
-        // 在 aplay 启动后才提供参考信号
-        audio_capture_->setPlaybackSource(result.output_file_path);
-
-        bool interrupted = false;
+        std::string user_text;
         while (true) {
-            int status;
-            pid_t ret = waitpid(aplay_pid, &status, WNOHANG);
-            if (ret > 0) break;
+            if (audio_capture_->isPlaybackComplete()) break;
 
             if (audio_capture_->hasPendingUtterance()) {
-                logger::info("VoiceEngine", "用户打断，停止播放");
-                kill(aplay_pid, SIGKILL);
-                waitpid(aplay_pid, &status, 0);
-                interrupted = true;
-                break;
+                std::string wav = audio_capture_->getPendingWav();
+
+                // ASR the barge-in audio before deciding whether to stop playback
+                speech::RecognitionResult asr = recognizer_->recognize(wav, "wav", 16000);
+                if (asr.success && !asr.text.empty()) {
+                    // Echo check: substring match + character overlap
+                    if (text.find(asr.text) != std::string::npos ||
+                        isEchoText(asr.text, text)) {
+                        logger::info("VoiceEngine", "忽略回声: " + asr.text);
+                        // Reset VAD, continue playing
+                        audio_capture_->setBargeInMode(true);
+                        continue;
+                    }
+                    // Real user interruption
+                    logger::info("VoiceEngine", "用户打断: " + asr.text);
+                    audio_capture_->stopPlayback();
+                    user_text = asr.text;
+                    break;
+                }
+                // ASR failed or empty → ignore, continue playing
+                audio_capture_->setBargeInMode(true);
             }
 
             usleep(100000);
         }
 
         audio_capture_->setBargeInMode(false);
+        audio_capture_->flush();
+        usleep(500000); // 500ms for echo to dissipate
 
-        if (!interrupted) {
-            audio_capture_->flush();
+        return user_text;
+    }
+
+    // 检查 asr_text 是否是 tts_text 的回声（ASR 字符中 > 70% 出现在 TTS 中）
+    bool isEchoText(const std::string& asr_text, const std::string& tts_text) {
+        if (asr_text.empty() || tts_text.empty()) return false;
+        int match_chars = 0;
+        int asr_chars = 0;
+        for (size_t i = 0; i < asr_text.size(); ) {
+            size_t char_len = 1;
+            if ((asr_text[i] & 0x80) != 0) {
+                if ((asr_text[i] & 0xE0) == 0xC0) char_len = 2;
+                else if ((asr_text[i] & 0xF0) == 0xE0) char_len = 3;
+                else if ((asr_text[i] & 0xF8) == 0xF0) char_len = 4;
+            }
+            std::string ch = asr_text.substr(i, char_len);
+            if (tts_text.find(ch) != std::string::npos) {
+                match_chars++;
+            }
+            asr_chars++;
+            i += char_len;
         }
-
-        // 等待回声消散，避免误识别
-        usleep(500000); // 500ms
+        // ASR 字符中 > 70% 出现在 TTS 中，视为回声
+        return asr_chars > 0 && (float)match_chars / asr_chars > 0.7f;
     }
 
     bool containsWakeWord(const std::string& text) {
