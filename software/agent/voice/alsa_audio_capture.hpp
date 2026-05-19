@@ -11,8 +11,6 @@
 #include <fstream>
 #include <cstring>
 #include <alsa/asoundlib.h>
-#include <speex/speex_echo.h>
-#include <speex/speex_preprocess.h>
 
 #include "voice/audio_capture.hpp"
 #include "voice/vad.hpp"
@@ -30,39 +28,23 @@ public:
         , sample_rate_(sample_rate)
         , running_(false)
         , muted_(false)
-        , barge_in_mode_(false)
         , has_utterance_(false)
         , utterance_counter_(0)
         , vad_(sample_rate, 1500.0f, 15, 30)
-        , barge_in_vad_(sample_rate, 2000.0f, 8, 10)
-        , echo_state_(nullptr)
-        , preprocess_state_(nullptr)
-        , aec_enabled_(true)
-        , frame_size_(sample_rate / 100)
-        , echo_buffer_(sample_rate * 4)
-        , echo_write_pos_(0)
-        , echo_read_pos_(0)
         , playback_active_(false)
         , playback_complete_(true) {}
 
     ~AlsaAudioCapture() {
         stop();
-        cleanupAEC();
     }
 
     void start() override {
         running_ = true;
         muted_ = false;
-        barge_in_mode_ = false;
         has_utterance_.store(false);
         playback_active_ = false;
         playback_complete_ = true;
         vad_.reset();
-        barge_in_vad_.reset();
-
-        if (aec_enabled_ && !echo_state_) {
-            initializeAEC();
-        }
 
         capture_thread_ = std::thread(&AlsaAudioCapture::captureLoop, this);
         playback_thread_ = std::thread(&AlsaAudioCapture::playbackLoop, this);
@@ -84,7 +66,6 @@ public:
     void flush() override {
         std::lock_guard<std::mutex> lock(mutex_);
         vad_.reset();
-        barge_in_vad_.reset();
         has_utterance_.store(false);
         pending_wav_.clear();
     }
@@ -94,37 +75,11 @@ public:
         if (muted) flush();
     }
 
-    void setBargeInMode(bool enabled) override {
-        barge_in_mode_ = enabled;
-        barge_in_vad_.reset();
-    }
-
-    void setEchoCancellation(bool enabled) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        aec_enabled_ = enabled;
-        if (enabled && !echo_state_) {
-            initializeAEC();
-        } else if (!enabled && echo_state_) {
-            cleanupAEC();
-        }
-    }
-
-    void writeEchoReference(const int16_t* data, int frames) override {
-        if (!aec_enabled_ || !echo_state_) return;
-
-        // Direct write to ring buffer — playbackLoop is the sole writer
-        int wp = echo_write_pos_.load();
-        for (int i = 0; i < frames; i++) {
-            echo_buffer_[wp] = data[i];
-            wp = (wp + 1) % static_cast<int>(echo_buffer_.size());
-        }
-        echo_write_pos_.store(wp);
-    }
-
     void setPlaybackSource(const std::string& wav_path) override {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             playback_source_ = wav_path;
+            playback_complete_.store(false);
         }
         playback_cv_.notify_one();
     }
@@ -170,76 +125,6 @@ public:
     }
 
 private:
-    void initializeAEC() {
-        int filter_length = sample_rate_ * 2;
-        echo_state_ = speex_echo_state_init(frame_size_, filter_length);
-        speex_echo_ctl(echo_state_, SPEEX_ECHO_SET_SAMPLING_RATE, &sample_rate_);
-
-        // 残差回声抑制 + 噪声抑制 + AGC
-        preprocess_state_ = speex_preprocess_state_init(frame_size_, sample_rate_);
-        speex_preprocess_ctl(preprocess_state_, SPEEX_PREPROCESS_SET_ECHO_STATE, echo_state_);
-
-        int enabled = 1;
-        speex_preprocess_ctl(preprocess_state_, SPEEX_PREPROCESS_SET_DENOISE, &enabled);
-
-        int noise_suppress = 20;
-        speex_preprocess_ctl(preprocess_state_, SPEEX_PREPROCESS_SET_NOISE_SUPPRESS, &noise_suppress);
-
-        speex_preprocess_ctl(preprocess_state_, SPEEX_PREPROCESS_SET_AGC, &enabled);
-    }
-
-    void cleanupAEC() {
-        if (echo_state_) {
-            speex_echo_state_destroy(echo_state_);
-            echo_state_ = nullptr;
-        }
-        if (preprocess_state_) {
-            speex_preprocess_state_destroy(preprocess_state_);
-            preprocess_state_ = nullptr;
-        }
-    }
-
-    int readEchoBuffer(int16_t* buffer, int frames) {
-        int rp = echo_read_pos_.load();
-        int wp = echo_write_pos_.load();
-        int available = (wp - rp + static_cast<int>(echo_buffer_.size()))
-                        % static_cast<int>(echo_buffer_.size());
-        int to_read = std::min(frames, available);
-        for (int i = 0; i < to_read; i++) {
-            buffer[i] = echo_buffer_[rp];
-            rp = (rp + 1) % static_cast<int>(echo_buffer_.size());
-        }
-        echo_read_pos_.store(rp);
-        // Zero-fill if not enough data
-        for (int i = to_read; i < frames; i++) {
-            buffer[i] = 0;
-        }
-        return to_read;
-    }
-
-    void processWithAEC(const int16_t* input, int frames, int16_t* output) {
-        if (!aec_enabled_ || !echo_state_) {
-            std::memcpy(output, input, frames * sizeof(int16_t));
-            return;
-        }
-
-        // 只在播放进行中时做 AEC + 预处理，避免无回声参考时污染 Speex 内部状态
-        if (!playback_active_.load()) {
-            std::memcpy(output, input, frames * sizeof(int16_t));
-            return;
-        }
-
-        int16_t echo_ref[frame_size_];
-        readEchoBuffer(echo_ref, frames);
-
-        speex_echo_cancellation(echo_state_, const_cast<int16_t*>(input), echo_ref, output);
-
-        // 残差回声抑制 + 噪声抑制 + AGC
-        if (preprocess_state_) {
-            speex_preprocess_run(preprocess_state_, output);
-        }
-    }
-
     void captureLoop() {
         snd_pcm_t* handle = nullptr;
         int err = snd_pcm_open(&handle, device_.c_str(),
@@ -274,54 +159,20 @@ private:
 
             if (muted_) continue;
 
-            int16_t processed_buf[chunk];
-            processWithAEC(buf.data(), frames, processed_buf);
-
             std::lock_guard<std::mutex> lock(mutex_);
 
-            if (barge_in_mode_) {
-                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - playback_start_time_).count();
-                if (elapsed >= 500) {
-                    barge_in_vad_.process(processed_buf, frames);
+            vad_.process(buf.data(), frames);
 
-                    if (barge_in_vad_.speech_ended()) {
-                        std::vector<int16_t> audio = barge_in_vad_.take_buffer();
-                        if (audio.size() > 3200) {
-                            utterance_counter_++;
-                            std::string path = "/tmp/mose_barge_"
-                                + std::to_string(utterance_counter_) + ".wav";
-                            write_wav(path, audio, sample_rate_);
-                            pending_wav_ = path;
-                            has_utterance_.store(true);
-                            cv_.notify_one();
-                        }
-                    } else if (barge_in_vad_.is_speaking() && barge_in_vad_.buffer().size() > 80000) {
-                        // 最大时长保护：5秒后强制截断保存
-                        std::vector<int16_t> audio = barge_in_vad_.take_buffer();
-                        utterance_counter_++;
-                        std::string path = "/tmp/mose_barge_"
-                            + std::to_string(utterance_counter_) + ".wav";
-                        write_wav(path, audio, sample_rate_);
-                        pending_wav_ = path;
-                        has_utterance_.store(true);
-                        cv_.notify_one();
-                    }
-                }
-            } else {
-                vad_.process(processed_buf, frames);
-
-                if (vad_.speech_ended()) {
-                    std::vector<int16_t> audio = vad_.take_buffer();
-                    if (audio.size() > 6400) {
-                        utterance_counter_++;
-                        std::string path = "/tmp/mose_utt_"
-                            + std::to_string(utterance_counter_) + ".wav";
-                        write_wav(path, audio, sample_rate_);
-                        pending_wav_ = path;
-                        has_utterance_.store(true);
-                        cv_.notify_one();
-                    }
+            if (vad_.speech_ended()) {
+                std::vector<int16_t> audio = vad_.take_buffer();
+                if (audio.size() > 6400) {
+                    utterance_counter_++;
+                    std::string path = "/tmp/mose_utt_"
+                        + std::to_string(utterance_counter_) + ".wav";
+                    write_wav(path, audio, sample_rate_);
+                    pending_wav_ = path;
+                    has_utterance_.store(true);
+                    cv_.notify_one();
                 }
             }
         }
@@ -384,12 +235,7 @@ private:
             return;
         }
 
-        // Reset echo buffer pointers for synchronized AEC
-        echo_write_pos_.store(0);
-        echo_read_pos_.store(0);
-
         playback_active_.store(true);
-        playback_start_time_ = std::chrono::steady_clock::now();
         playback_complete_.store(false);
 
         const int chunk = 160;  // 10ms at 16kHz
@@ -398,26 +244,16 @@ private:
         while (running_ && playback_active_.load() && pos < audio_data.size()) {
             int frames = std::min(chunk, static_cast<int>(audio_data.size() - pos));
 
-            // Write to speaker — snd_pcm_writei blocks, providing natural rate control
             int written = snd_pcm_writei(pcm, audio_data.data() + pos, frames);
             if (written < 0) {
                 written = snd_pcm_recover(pcm, written, 0);
                 if (written < 0) break;
             }
 
-            // Write same data to echo reference — synchronized with actual playback
-            writeEchoReference(audio_data.data() + pos, frames);
-
             pos += frames;
         }
 
-        if (playback_active_.load()) {
-            // Normal completion — drain remaining audio
-            snd_pcm_drain(pcm);
-        } else {
-            // Interrupted — drop immediately
-            snd_pcm_drop(pcm);
-        }
+        snd_pcm_drain(pcm);
 
         playback_active_.store(false);
         snd_pcm_close(pcm);
@@ -446,24 +282,13 @@ private:
     int sample_rate_;
     std::atomic<bool> running_;
     std::atomic<bool> muted_;
-    std::atomic<bool> barge_in_mode_;
 
     std::mutex mutex_;
     std::condition_variable cv_;
     VoiceActivityDetector vad_;
-    VoiceActivityDetector barge_in_vad_;
     std::string pending_wav_;
     std::atomic<bool> has_utterance_;
     int utterance_counter_;
-
-    // AEC components
-    SpeexEchoState* echo_state_;
-    SpeexPreprocessState* preprocess_state_;
-    bool aec_enabled_;
-    int frame_size_;
-    std::vector<int16_t> echo_buffer_;
-    std::atomic<int> echo_write_pos_;
-    std::atomic<int> echo_read_pos_;
 
     // Playback control
     std::string playback_source_;
@@ -471,7 +296,6 @@ private:
     std::thread playback_thread_;
     std::atomic<bool> playback_active_;
     std::atomic<bool> playback_complete_;
-    std::chrono::steady_clock::time_point playback_start_time_;
 
     std::thread capture_thread_;
 };

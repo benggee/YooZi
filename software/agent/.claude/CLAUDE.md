@@ -48,12 +48,12 @@ lib/vendor/base64.hpp              Base64 编码器
 ### VoiceEngine 状态机
 
 ```
-SLEEPING → (唤醒词 "Mose") → AWAKE → (2分钟无对话) → SLEEPING
+SLEEPING → (唤醒词 "你好柚子"/"柚子") → AWAKE → (退出词/2分钟无对话) → SLEEPING
 ```
 
-1. **SLEEPING**：麦克风持续采集，VAD 检测到语音 → 保存 WAV → ASR 转文字 → 检查唤醒词（"mose"/"摩丝"/"莫斯"/"摩斯"）
-2. **AWAKE**：等待用户说话 → ASR → 发送给 LLM（带工具列表）→ LLM 返回文本或工具调用 → 执行工具 → 循环直到得到最终文本 → TTS → `aplay -D card3` 播放
-3. 播放期间麦克风自动静音（`setMuted(true)`），防止回声
+1. **SLEEPING**：麦克风持续采集，VAD 检测到语音 → 保存 WAV → ASR 转文字 → 检查唤醒词（"柚子"/"你好柚子"）
+2. **AWAKE**：等待用户说话 → ASR → 发送给 LLM（带工具列表）→ LLM 返回文本或工具调用 → 执行工具 → 循环直到得到最终文本 → TTS → 播放
+3. 退出词："退下"、"滚吧"、"你下去吧"、"下去吧"
 
 ### 工具调用流程
 

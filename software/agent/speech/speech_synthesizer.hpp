@@ -17,7 +17,8 @@ public:
                                         const std::string& output_path,
                                         const std::string& format,
                                         int sample_rate,
-                                        const std::string& voice) = 0;
+                                        const std::string& voice,
+                                        float speech_rate = 1.0f) = 0;
 };
 
 } // namespace speech

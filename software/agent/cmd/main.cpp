@@ -13,7 +13,7 @@
 #include "speech/alibaba_config.hpp"
 #include "speech/alibaba_speech_recognizer.hpp"
 #include "speech/alibaba_speech_synthesizer.hpp"
-#include "anthropic/http/http_client.hpp"
+#include "nlsClient.h"
 #include "camera/pi_camera_capture.hpp"
 #include "voice/alsa_audio_capture.hpp"
 #include "voice/voice_engine.hpp"
@@ -36,7 +36,6 @@ int main() {
     std::string workDir(cwd);
 
     provider::OpenAIProvider llm_provider("glm-5v-turbo");
-    anthropic::http::CurlHttpClient speech_http;
 
     camera::PiCameraCapture camera_capture;
 
@@ -49,8 +48,15 @@ int main() {
         has_speech = false;
     }
 
-    speech::AlibabaSpeechRecognizer asr(alibaba_config, &speech_http);
-    speech::AlibabaSpeechSynthesizer tts(alibaba_config, &speech_http);
+    // Initialize NLS SDK client
+    AlibabaNls::NlsClient* nls_client = nullptr;
+    if (has_speech) {
+        nls_client = AlibabaNls::NlsClient::getInstance();
+        nls_client->startWorkThread(1);
+    }
+
+    speech::AlibabaSpeechRecognizer asr(alibaba_config, nls_client);
+    speech::AlibabaSpeechSynthesizer tts(alibaba_config, nls_client);
 
     tools::ReadFileTool read_file_tool(workDir);
     tools::WriteFileTool write_file_tool(workDir);
@@ -85,6 +91,10 @@ int main() {
     } catch (const std::exception& e) {
         logger::error("Main", std::string("VoiceEngine crashed: ") + e.what());
         return 1;
+    }
+
+    if (nls_client) {
+        AlibabaNls::NlsClient::releaseInstance();
     }
 
     logger::info("Main", "Mose Finished.");

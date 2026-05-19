@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <cstdlib>
 #include <ctime>
 
 #include "tools/base_tool.hpp"
@@ -52,9 +51,10 @@ public:
         nlohmann::json args = nlohmann::json::parse(args_json);
 
         std::string text = args.value("text", std::string());
-        std::string voice = args.value("voice", std::string("xiaoyun"));
+        std::string voice = args.value("voice", std::string("longanli"));
         std::string format = args.value("format", std::string("wav"));
         int sample_rate = args.value("sample_rate", 16000);
+        float speech_rate = args.value("speech_rate", 1.5f);
 
         if (text.empty()) {
             throw std::runtime_error("text is required");
@@ -63,13 +63,11 @@ public:
         std::string output_path = generate_temp_path(format);
 
         speech::SynthesisResult result = synthesizer_->synthesize(
-            text, output_path, format, sample_rate, voice);
+            text, output_path, format, sample_rate, voice, speech_rate);
 
         if (!result.success) {
             throw std::runtime_error("Speech synthesis failed: " + result.error_message);
         }
-
-        play_audio(result.output_file_path);
 
         nlohmann::json out;
         out["status"] = "success";
@@ -84,15 +82,6 @@ private:
         char buf[64];
         std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", std::localtime(&now));
         return std::string("/tmp/tts_") + buf + "." + format;
-    }
-
-    void play_audio(const std::string& file_path) {
-        // 使用与语音引擎相同的播放设备: plughw:3,0 (ReSpeaker 2-Mics Pi HAT)
-        std::string cmd = "aplay -D plughw:3,0 \"" + file_path + "\"";
-        int ret = std::system(cmd.c_str());
-        if (ret != 0) {
-            throw std::runtime_error("Audio playback failed with code: " + std::to_string(ret));
-        }
     }
 
     speech::SpeechSynthesizer* synthesizer_;

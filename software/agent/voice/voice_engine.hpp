@@ -111,9 +111,6 @@ private:
                 // 先播放确认音，然后再切换状态
                 speak("我在，请说");
 
-                // 等待回声消散
-                usleep(500000); // 500ms
-
                 // 切换到 AWAKE 状态并刷新 VAD
                 audio_capture_->flush();
                 state_ = AWAKE;
@@ -171,38 +168,17 @@ private:
             });
 
             std::string response = runAgentTurn();
-            if (!response.empty()) {
+            if (!response.empty() && !tts_played_) {
                 logger::info("VoiceEngine", "Mose: " + response);
-                std::string user_text = speak(response);
-                // speak() 已做 flush + 800ms 等待，再 flush 一次丢弃残留
+                speak(response);
                 audio_capture_->flush();
-                while (!user_text.empty()) {
-                    // 打断后检查退出词
-                    if (containsExitWord(user_text)) {
-                        logger::info("VoiceEngine", "打断后退出: " + user_text);
-                        speak("好的，需要的时候再叫我");
-                        state_ = SLEEPING;
-                        break;
-                    }
-                    // 剥离打断词，检查是否有实际内容
-                    std::string remaining = stripBargeInWords(user_text);
-                    if (remaining.empty()) {
-                        // 只有打断词，等待用户继续说
-                        logger::info("VoiceEngine", "打断词无内容，等待用户继续");
-                        break;
-                    }
-                    logger::info("VoiceEngine", "用户(打断): " + remaining);
-                    context_.push_back(schema::Message{schema::RoleUser, remaining, {}, {}, ""});
-                    std::string response2 = runAgentTurn();
-                    if (!response2.empty()) {
-                        response = response2;
-                        logger::info("VoiceEngine", "Mose: " + response2);
-                        user_text = speak(response2);
-                    } else {
-                        break;
-                    }
+            } else {
+                if (tts_played_) {
+                    logger::info("VoiceEngine", "TTS已播放，跳过speak");
                 }
+                audio_capture_->flush();
             }
+            tts_played_ = false;
         }
     }
 
@@ -248,6 +224,19 @@ private:
                 obs.content = result.output;
                 obs.tool_call_id = tc.id;
                 context_.push_back(obs);
+
+                if (tc.name == "text_to_speech" && !result.is_error) {
+                    try {
+                        auto tool_out = nlohmann::json::parse(result.output);
+                        std::string output_file = tool_out.value("output_file", "");
+                        if (!output_file.empty()) {
+                            playTtsFile(output_file);
+                            tts_played_ = true;
+                        }
+                    } catch (const std::exception& e) {
+                        logger::error("VoiceEngine", std::string("播放TTS失败: ") + e.what());
+                    }
+                }
 
                 if (tc.name == "camera_capture" && !result.is_error) {
                     try {
@@ -298,9 +287,22 @@ private:
         }
     }
 
-    // Returns user_text if real barge-in detected, empty string if playback completed normally
-    std::string speak(const std::string& text) {
-        if (text.empty()) return "";
+    void playTtsFile(const std::string& wav_path) {
+        audio_capture_->setMuted(true);
+        audio_capture_->setPlaybackSource(wav_path);
+        while (!audio_capture_->isPlaybackComplete()) {
+            usleep(100000);
+        }
+        // 等待回声消散
+        usleep(500000);
+        audio_capture_->flush();
+        audio_capture_->setMuted(false);
+    }
+
+    void speak(const std::string& text) {
+        if (text.empty()) return;
+
+        audio_capture_->setMuted(true);
 
         std::time_t now = std::time(nullptr);
         char buf[64];
@@ -308,87 +310,36 @@ private:
         std::string out = std::string("/tmp/mose_tts_") + buf + ".wav";
 
         speech::SynthesisResult result = synthesizer_->synthesize(
-            text, out, "wav", 16000, "zhimiao_emo");
+            text, out, "wav", 16000, "longxiaocheng_v2", 1.5f);
 
         if (!result.success) {
             logger::error("VoiceEngine", "TTS错误: " + result.error_message);
-            return "";
+            audio_capture_->setMuted(false);
+            return;
         }
 
-        // Trigger direct ALSA playback + synchronized echo reference
-        audio_capture_->setPlaybackSource(result.output_file_path);
-        usleep(30000);  // Wait 30ms for playbackLoop to start
-
-        audio_capture_->setBargeInMode(true);
-
-        std::string user_text;
-        while (true) {
-            if (audio_capture_->isPlaybackComplete()) break;
-
-            if (audio_capture_->hasPendingUtterance()) {
-                std::string wav = audio_capture_->getPendingWav();
-
-                // ASR the barge-in audio
-                speech::RecognitionResult asr = recognizer_->recognize(wav, "wav", 16000);
-                if (asr.success && !asr.text.empty()) {
-                    if (containsBargeInWord(asr.text) || containsExitWord(asr.text)) {
-                        logger::info("VoiceEngine", "用户打断: " + asr.text);
-                        audio_capture_->stopPlayback();
-                        user_text = asr.text;
-                        break;
-                    }
-                    // 非关键词 → 忽略（可能是回声），继续播放
-                    logger::info("VoiceEngine", "播放中忽略: " + asr.text);
-                }
-                audio_capture_->setBargeInMode(true);
-            }
-
-            usleep(100000);
-        }
-
-        audio_capture_->setBargeInMode(false);
-        audio_capture_->flush();
-        usleep(800000); // 800ms — 等待回声完全消散
-
-        return user_text;
-    }
-
-    bool containsBargeInWord(const std::string& text) {
-        return text.find("你好柚子") != std::string::npos ||
-               text.find("柚子") != std::string::npos ||
-               text.find("停下") != std::string::npos;
+        playTtsFile(result.output_file_path);
     }
 
     bool containsExitWord(const std::string& text) {
-        return text.find("停止") != std::string::npos ||
-               text.find("退下") != std::string::npos ||
-               text.find("退出") != std::string::npos ||
-               text.find("滚蛋") != std::string::npos;
-    }
-
-    std::string stripBargeInWords(const std::string& text) {
-        std::string remaining = text;
-        const char* keywords[] = {"你好柚子", "柚子", "停下"};
-        for (auto& kw : keywords) {
-            size_t pos;
-            while ((pos = remaining.find(kw)) != std::string::npos) {
-                remaining.erase(pos, strlen(kw));
-            }
-        }
-        // trim spaces
-        size_t start = remaining.find_first_not_of(" \t\n");
-        if (start == std::string::npos) return "";
-        size_t end = remaining.find_last_not_of(" \t\n");
-        return remaining.substr(start, end - start + 1);
+        return text.find("退下") != std::string::npos ||
+               text.find("滚吧") != std::string::npos ||
+               text.find("你下去吧") != std::string::npos ||
+               text.find("下去吧") != std::string::npos;
     }
 
     bool containsWakeWord(const std::string& text) {
         std::string lower = text;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-        // 检查中文唤醒词
+        // 检查中文唤醒词（含常见误识别）
         if (text.find("柚子") != std::string::npos ||
-            text.find("你好柚子") != std::string::npos) {
+            text.find("你好柚子") != std::string::npos ||
+            text.find("燕子") != std::string::npos ||
+            text.find("油子") != std::string::npos ||
+            text.find("右子") != std::string::npos ||
+            text.find("有事") != std::string::npos ||
+            text.find("幽子") != std::string::npos) {
             return true;
         }
 
@@ -411,6 +362,7 @@ private:
 
     State state_;
     bool running_;
+    bool tts_played_ = false;
     std::time_t last_activity_;
     std::vector<schema::Message> context_;
     context::PromptComposer* composer_;

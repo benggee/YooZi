@@ -3,20 +3,34 @@
 #include <string>
 #include <fstream>
 #include <sstream>
-#include <stdexcept>
+#include <vector>
+#include <mutex>
+#include <condition_variable>
 
 #include "speech/speech_recognizer.hpp"
 #include "speech/alibaba_config.hpp"
-#include "anthropic/http/http_client.hpp"
-#include "vendor/nlohmann/json.hpp"
+#include "nlsClient.h"
+#include "speechRecognizerRequest.h"
+#include "nlsEvent.h"
+#include "common/logger.hpp"
 
 namespace speech {
+
+struct AsrContext {
+    std::string result_text;
+    bool completed = false;
+    bool failed = false;
+    bool started = false;
+    std::string error_message;
+    std::mutex mtx;
+    std::condition_variable cv;
+};
 
 class AlibabaSpeechRecognizer : public SpeechRecognizer {
 public:
     AlibabaSpeechRecognizer(const AlibabaConfig& config,
-                             anthropic::http::HttpClient* http_client)
-        : config_(config), http_client_(http_client) {}
+                             AlibabaNls::NlsClient* client)
+        : config_(config), client_(client) {}
 
     RecognitionResult recognize(const std::string& audio_file_path,
                                  const std::string& format,
@@ -24,64 +38,158 @@ public:
         RecognitionResult result;
         result.success = false;
 
-        std::string audio_data = read_binary_file(audio_file_path);
+        std::vector<uint8_t> audio_data = read_binary_file(audio_file_path);
         if (audio_data.empty()) {
             result.error_message = "Failed to read audio file: " + audio_file_path;
             return result;
         }
 
-        std::string url = std::string("https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/asr")
-            + "?appkey=" + config_.appkey
-            + "&format=" + format
-            + "&sample_rate=" + std::to_string(sample_rate)
-            + "&enable_punctuation_prediction=true"
-            + "&enable_inverse_text_normalization=true";
+        AsrContext ctx;
 
-        std::vector<std::pair<std::string, std::string>> headers;
-        headers.push_back({"Content-Type", "application/octet-stream"});
-        headers.push_back({"X-NLS-Token", config_.token});
-
-        anthropic::http::HttpResponse resp = http_client_->post(url, audio_data, headers);
-
-        if (resp.status_code == 0) {
-            result.error_message = "Network error: " + resp.body;
+        AlibabaNls::SpeechRecognizerRequest* request =
+            client_->createRecognizerRequest();
+        if (!request) {
+            result.error_message = "Failed to create ASR request";
             return result;
         }
 
-        nlohmann::json resp_json;
-        try {
-            resp_json = nlohmann::json::parse(resp.body);
-        } catch (const std::exception& e) {
-            result.error_message = std::string("Failed to parse ASR response: ") + e.what();
+        // Set callbacks
+        request->setOnRecognitionStarted(onRecognitionStarted, &ctx);
+        request->setOnRecognitionCompleted(onRecognitionCompleted, &ctx);
+        request->setOnRecognitionResultChanged(onRecognitionResultChanged, &ctx);
+        request->setOnTaskFailed(onTaskFailed, &ctx);
+        request->setOnChannelClosed(onChannelClosed, &ctx);
+
+        // Set parameters
+        request->setAppKey(config_.appkey.c_str());
+        request->setToken(config_.token.c_str());
+        request->setFormat(format.c_str());
+        request->setSampleRate(sample_rate);
+        request->setPunctuationPrediction(true);
+        request->setInverseTextNormalization(true);
+        request->setTimeout(5000);
+
+        int ret = request->start();
+        if (ret < 0) {
+            result.error_message = "ASR start failed: " + std::to_string(ret);
+            client_->releaseRecognizerRequest(request);
             return result;
         }
 
-        if (resp_json.count("status") && resp_json["status"].get<int>() != 20000000) {
-            result.error_message = "ASR error: " + resp_json.value("message", "unknown error");
+        // Wait for recognition started
+        {
+            std::unique_lock<std::mutex> lock(ctx.mtx);
+            if (!ctx.cv.wait_for(lock, std::chrono::seconds(10), [&ctx] {
+                return ctx.started || ctx.failed;
+            })) {
+                result.error_message = "ASR start timeout";
+                request->cancel();
+                client_->releaseRecognizerRequest(request);
+                return result;
+            }
+        }
+
+        if (ctx.failed) {
+            result.error_message = ctx.error_message;
+            client_->releaseRecognizerRequest(request);
             return result;
         }
 
-        if (resp.status_code >= 400) {
-            result.error_message = "ASR HTTP error [" + std::to_string(resp.status_code) + "]: " + resp.body;
+        // Send audio data in chunks
+        const size_t chunk_size = 6400;  // ~200ms of 16kHz 16-bit audio
+        size_t offset = 0;
+        while (offset < audio_data.size()) {
+            size_t len = std::min(chunk_size, audio_data.size() - offset);
+            ret = request->sendAudio(audio_data.data() + offset, len);
+            if (ret < 0) {
+                logger::warn("ASR", "sendAudio failed at offset " + std::to_string(offset));
+                break;
+            }
+            offset += len;
+            // Small delay between chunks to avoid overwhelming the SDK
+            usleep(20000);  // 20ms
+        }
+
+        // Stop recognition (triggers RecognitionCompleted callback)
+        request->stop();
+
+        // Wait for completion
+        {
+            std::unique_lock<std::mutex> lock(ctx.mtx);
+            if (!ctx.cv.wait_for(lock, std::chrono::seconds(15), [&ctx] {
+                return ctx.completed || ctx.failed;
+            })) {
+                result.error_message = "ASR completion timeout";
+                request->cancel();
+                client_->releaseRecognizerRequest(request);
+                return result;
+            }
+        }
+
+        client_->releaseRecognizerRequest(request);
+
+        if (ctx.failed) {
+            result.error_message = ctx.error_message;
             return result;
         }
 
-        result.text = resp_json.value("result", std::string());
+        result.text = ctx.result_text;
         result.success = true;
         return result;
     }
 
 private:
-    std::string read_binary_file(const std::string& path) {
+    static void onRecognitionStarted(AlibabaNls::NlsEvent* event, void* param) {
+        AsrContext* ctx = static_cast<AsrContext*>(param);
+        std::lock_guard<std::mutex> lock(ctx->mtx);
+        ctx->started = true;
+        ctx->cv.notify_one();
+    }
+
+    static void onRecognitionResultChanged(AlibabaNls::NlsEvent* event, void* param) {
+        // Intermediate results - not needed for one-shot recognition
+    }
+
+    static void onRecognitionCompleted(AlibabaNls::NlsEvent* event, void* param) {
+        AsrContext* ctx = static_cast<AsrContext*>(param);
+        std::lock_guard<std::mutex> lock(ctx->mtx);
+        const char* result = event->getResult();
+        if (result) {
+            ctx->result_text = result;
+        }
+        ctx->completed = true;
+        ctx->cv.notify_one();
+    }
+
+    static void onTaskFailed(AlibabaNls::NlsEvent* event, void* param) {
+        AsrContext* ctx = static_cast<AsrContext*>(param);
+        std::lock_guard<std::mutex> lock(ctx->mtx);
+        ctx->failed = true;
+        ctx->error_message = "ASR error [" + std::to_string(event->getStatusCode())
+            + "]: " + (event->getErrorMessage() ? event->getErrorMessage() : "unknown");
+        ctx->cv.notify_one();
+    }
+
+    static void onChannelClosed(AlibabaNls::NlsEvent* event, void* param) {
+        AsrContext* ctx = static_cast<AsrContext*>(param);
+        std::lock_guard<std::mutex> lock(ctx->mtx);
+        if (!ctx->completed && !ctx->failed) {
+            ctx->completed = true;
+        }
+        ctx->cv.notify_one();
+    }
+
+    std::vector<uint8_t> read_binary_file(const std::string& path) {
         std::ifstream file(path, std::ios::binary);
-        if (!file.is_open()) return "";
-        std::ostringstream ss;
-        ss << file.rdbuf();
-        return ss.str();
+        if (!file.is_open()) return {};
+        std::vector<uint8_t> data((
+            std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
+        return data;
     }
 
     AlibabaConfig config_;
-    anthropic::http::HttpClient* http_client_;
+    AlibabaNls::NlsClient* client_;
 };
 
 } // namespace speech
