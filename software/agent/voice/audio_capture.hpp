@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
+#include <stddef.h>
 
 namespace voice {
 
@@ -18,6 +20,11 @@ public:
     virtual bool isPlaybackComplete() const = 0;
     virtual void stopPlayback() = 0;
     virtual void setPlaybackDevice(const std::string& device) = 0;
+
+    // Streaming playback: PCM data written directly to ALSA
+    virtual bool beginStreamPlayback() = 0;
+    virtual void writeStreamPCM(const int16_t* data, size_t num_samples) = 0;
+    virtual void endStreamPlayback() = 0;
 };
 
 } // namespace voice

@@ -51,10 +51,10 @@ public:
         nlohmann::json args = nlohmann::json::parse(args_json);
 
         std::string text = args.value("text", std::string());
-        std::string voice = args.value("voice", std::string("longanli"));
+        std::string voice = args.value("voice", std::string("longxiaoxia_v3"));
         std::string format = args.value("format", std::string("wav"));
         int sample_rate = args.value("sample_rate", 16000);
-        float speech_rate = args.value("speech_rate", 1.5f);
+        float speech_rate = args.value("speech_rate", 1.0f);
 
         if (text.empty()) {
             throw std::runtime_error("text is required");

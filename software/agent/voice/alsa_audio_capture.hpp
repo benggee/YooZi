@@ -62,6 +62,10 @@ public:
         if (playback_thread_.joinable()) {
             playback_thread_.join();
         }
+        if (stream_pcm_) {
+            snd_pcm_close(stream_pcm_);
+            stream_pcm_ = nullptr;
+        }
     }
 
     void flush() override {
@@ -95,6 +99,58 @@ public:
 
     void setPlaybackDevice(const std::string& device) override {
         playback_device_ = device;
+    }
+
+    // --- Streaming playback ---
+    bool beginStreamPlayback() override {
+        int err = snd_pcm_open(&stream_pcm_, playback_device_.c_str(),
+                               SND_PCM_STREAM_PLAYBACK, 0);
+        if (err < 0) {
+            std::cerr << "[AlsaAudioCapture] Stream playback open failed: "
+                      << snd_strerror(err) << std::endl;
+            stream_pcm_ = nullptr;
+            return false;
+        }
+
+        err = snd_pcm_set_params(stream_pcm_,
+                                 SND_PCM_FORMAT_S16_LE,
+                                 SND_PCM_ACCESS_RW_INTERLEAVED,
+                                 1, sample_rate_, 1, 500000);
+        if (err < 0) {
+            std::cerr << "[AlsaAudioCapture] Stream playback set params failed: "
+                      << snd_strerror(err) << std::endl;
+            snd_pcm_close(stream_pcm_);
+            stream_pcm_ = nullptr;
+            return false;
+        }
+
+        return true;
+    }
+
+    void writeStreamPCM(const int16_t* data, size_t num_samples) override {
+        if (!stream_pcm_) return;
+
+        const int chunk = 160;  // 10ms at 16kHz
+        size_t pos = 0;
+
+        while (pos < num_samples) {
+            int frames = std::min(chunk,
+                static_cast<int>(num_samples - pos));
+            int written = snd_pcm_writei(stream_pcm_, data + pos, frames);
+            if (written < 0) {
+                written = snd_pcm_recover(stream_pcm_, written, 0);
+                if (written < 0) break;
+            }
+            pos += frames;
+        }
+    }
+
+    void endStreamPlayback() override {
+        if (stream_pcm_) {
+            snd_pcm_drain(stream_pcm_);
+            snd_pcm_close(stream_pcm_);
+            stream_pcm_ = nullptr;
+        }
     }
 
     void setLedController(LedController* led) {
@@ -314,6 +370,9 @@ private:
     std::atomic<bool> playback_complete_;
 
     std::thread capture_thread_;
+
+    // Streaming playback handle (independent from playback_thread_)
+    snd_pcm_t* stream_pcm_ = nullptr;
 
     LedController* led_ = nullptr;
 };

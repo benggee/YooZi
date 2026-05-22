@@ -315,13 +315,39 @@ private:
 
         audio_capture_->setMuted(true);
 
+        // Try streaming playback first
+        if (audio_capture_->beginStreamPlayback()) {
+            speech::StreamSynthesisResult sr = synthesizer_->synthesizeStream(
+                text, 16000, "longxiaoxia_v3", 1.0f,
+                [this](const uint8_t* data, size_t len) {
+                    if (len >= 2) {
+                        audio_capture_->writeStreamPCM(
+                            reinterpret_cast<const int16_t*>(data),
+                            len / 2);
+                    }
+                });
+
+            audio_capture_->endStreamPlayback();
+
+            if (sr.success) {
+                usleep(500000);
+                audio_capture_->flush();
+                audio_capture_->setMuted(false);
+                if (led_) led_->setOff();
+                return;
+            }
+
+            logger::warn("VoiceEngine", "流式TTS失败, 回退文件模式: " + sr.error_message);
+        }
+
+        // Fallback: file-based playback
         std::time_t now = std::time(nullptr);
         char buf[64];
         std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", std::localtime(&now));
         std::string out = std::string("/tmp/mose_tts_") + buf + ".wav";
 
         speech::SynthesisResult result = synthesizer_->synthesize(
-            text, out, "wav", 16000, "longxiaocheng_v2", 1.5f);
+            text, out, "wav", 16000, "longxiaoxia_v3", 1.0f);
 
         if (!result.success) {
             logger::error("VoiceEngine", "TTS错误: " + result.error_message);
