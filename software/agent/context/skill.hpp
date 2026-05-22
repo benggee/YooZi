@@ -33,11 +33,16 @@ public:
 
         struct stat st;
         if (stat(skillBaseDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            logger::warn("SkillLoader", "Skills dir not found: " + skillBaseDir);
             return "";
         }
 
+        logger::info("SkillLoader", "Scanning: " + skillBaseDir);
+
         std::vector<std::string> skillFiles;
         scanDir(skillBaseDir, skillFiles);
+
+        logger::info("SkillLoader", "Found " + std::to_string(skillFiles.size()) + " skill files");
 
         if (skillFiles.empty()) {
             return "";

@@ -1,6 +1,8 @@
 #include <iostream>
 #include <cstdlib>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <libgen.h>
 
 #include "provider/openai_provider.hpp"
 #include "tools/registry.hpp"
@@ -20,6 +22,33 @@
 #include "voice/led_controller.hpp"
 #include "common/logger.hpp"
 
+// 获取二进制文件路径，向上查找项目根目录（包含 .yooz/skills 的目录）
+static std::string resolveProjectDir(const std::string& cwd) {
+    struct stat st;
+
+    // 1. 先检查 cwd 本身
+    std::string check = cwd + "/.yooz/skills";
+    if (stat(check.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+        return cwd;
+    }
+
+    // 2. 向上查找（最多 3 层）
+    std::string dir = cwd;
+    for (int i = 0; i < 3; i++) {
+        size_t pos = dir.rfind('/');
+        if (pos == std::string::npos) break;
+        dir = dir.substr(0, pos);
+        if (dir.empty()) dir = "/";
+        check = dir + "/.yooz/skills";
+        if (stat(check.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            return dir;
+        }
+    }
+
+    // 3. 回退到 cwd
+    return cwd;
+}
+
 int main() {
     logger::init("/tmp");
     logger::info("Main", "Hello, YooZi!");
@@ -35,6 +64,8 @@ int main() {
         return 1;
     }
     std::string workDir(cwd);
+    workDir = resolveProjectDir(workDir);
+    logger::info("Main", "Project dir: " + workDir);
 
     provider::OpenAIProvider llm_provider("glm-5v-turbo");
 

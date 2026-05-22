@@ -260,7 +260,7 @@ private:
                             });
                             vision_msg.content_parts.push_back(schema::ContentPart{
                                 schema::ContentPart::TEXT,
-                                "请描述这张照片的内容，用中文简洁回答。", ""
+                                "这是你面前的摄像头刚刚拍下的照片，照片中的人就是正在和你说话的用户。请用第二人称简短描述用户正在做什么，一两句话即可。", ""
                             });
                             context_.push_back(vision_msg);
                         }

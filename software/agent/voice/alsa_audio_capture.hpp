@@ -33,7 +33,8 @@ public:
         , utterance_counter_(0)
         , vad_(sample_rate, 1500.0f, 15, 30)
         , playback_active_(false)
-        , playback_complete_(true) {}
+        , playback_complete_(true)
+        , cooldown_until_(std::chrono::steady_clock::now()) {}
 
     ~AlsaAudioCapture() {
         stop();
@@ -77,7 +78,12 @@ public:
 
     void setMuted(bool muted) override {
         muted_ = muted;
-        if (muted) flush();
+        if (muted) {
+            flush();
+        } else {
+            cooldown_until_ = std::chrono::steady_clock::now()
+                + std::chrono::milliseconds(1200);
+        }
     }
 
     void setPlaybackSource(const std::string& wav_path) override {
@@ -220,6 +226,7 @@ private:
             }
 
             if (muted_) continue;
+            if (std::chrono::steady_clock::now() < cooldown_until_) continue;
 
             std::lock_guard<std::mutex> lock(mutex_);
 
@@ -375,6 +382,9 @@ private:
     snd_pcm_t* stream_pcm_ = nullptr;
 
     LedController* led_ = nullptr;
+
+    // Cooldown to prevent echo from speaker after unmute
+    std::chrono::steady_clock::time_point cooldown_until_;
 };
 
 } // namespace voice
