@@ -15,6 +15,7 @@
 #include "voice/audio_capture.hpp"
 #include "voice/vad.hpp"
 #include "voice/wav_writer.hpp"
+#include "voice/led_controller.hpp"
 
 namespace voice {
 
@@ -96,6 +97,10 @@ public:
         playback_device_ = device;
     }
 
+    void setLedController(LedController* led) {
+        led_ = led;
+    }
+
     std::string waitForUtterance(int timeout_seconds) override {
         std::unique_lock<std::mutex> lock(mutex_);
         if (timeout_seconds <= 0) {
@@ -148,6 +153,7 @@ private:
 
         const int chunk = 160;
         std::vector<int16_t> buf(chunk);
+        bool was_speaking = false;
 
         while (running_) {
             int frames = snd_pcm_readi(handle, buf.data(), chunk);
@@ -163,7 +169,17 @@ private:
 
             vad_.process(buf.data(), frames);
 
+            // LED: user starts speaking → on
+            if (!was_speaking && vad_.is_speaking()) {
+                if (led_) led_->setOn();
+                was_speaking = true;
+            }
+
             if (vad_.speech_ended()) {
+                // LED: user finished speaking → breathing (machine thinking)
+                if (led_) led_->setBreathing();
+                was_speaking = false;
+
                 std::vector<int16_t> audio = vad_.take_buffer();
                 if (audio.size() > 6400) {
                     utterance_counter_++;
@@ -298,6 +314,8 @@ private:
     std::atomic<bool> playback_complete_;
 
     std::thread capture_thread_;
+
+    LedController* led_ = nullptr;
 };
 
 } // namespace voice

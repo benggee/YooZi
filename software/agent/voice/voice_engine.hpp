@@ -13,6 +13,7 @@
 #include "speech/speech_recognizer.hpp"
 #include "speech/speech_synthesizer.hpp"
 #include "voice/audio_capture.hpp"
+#include "voice/led_controller.hpp"
 #include "schema/message.hpp"
 #include "context/composer.hpp"
 #include "vendor/nlohmann/json.hpp"
@@ -29,7 +30,8 @@ public:
                 speech::SpeechRecognizer* recognizer,
                 speech::SpeechSynthesizer* synthesizer,
                 AudioCapture* audio_capture,
-                const std::string& work_dir)
+                const std::string& work_dir,
+                LedController* led = nullptr)
         : provider_(provider)
         , registry_(registry)
         , recognizer_(recognizer)
@@ -39,6 +41,7 @@ public:
         , state_(SLEEPING)
         , running_(false)
         , last_activity_(0)
+        , led_(led)
         , composer_(new context::PromptComposer(work_dir)) {}
 
     ~VoiceEngine() {
@@ -115,6 +118,9 @@ private:
                 audio_capture_->flush();
                 state_ = AWAKE;
                 last_activity_ = std::time(nullptr);
+            } else {
+                // 不是唤醒词，关闭 LED
+                if (led_) led_->setOff();
             }
         }
     }
@@ -128,6 +134,7 @@ private:
             if (remaining <= 0) {
                 logger::info("VoiceEngine", "超时，进入休眠。");
                 speak("我先休息一下，需要的时候再叫我");
+                if (led_) led_->setOff();
                 state_ = SLEEPING;
                 break;
             }
@@ -138,6 +145,7 @@ private:
             if (wav.empty()) {
                 logger::info("VoiceEngine", "2分钟无对话，进入休眠。");
                 speak("我先休息一下，需要的时候再叫我");
+                if (led_) led_->setOff();
                 state_ = SLEEPING;
                 break;
             }
@@ -157,6 +165,7 @@ private:
             if (containsExitWord(user_text)) {
                 logger::info("VoiceEngine", "用户退出: " + user_text);
                 speak("好的，需要的时候再叫我");
+                if (led_) led_->setOff();
                 state_ = SLEEPING;
                 break;
             }
@@ -167,6 +176,7 @@ private:
                 schema::RoleUser, user_text, {}, {}, ""
             });
 
+            if (led_) led_->setBreathing();  // 思考中 → 呼吸灯
             std::string response = runAgentTurn();
             if (!response.empty() && !tts_played_) {
                 logger::info("VoiceEngine", "Mose: " + response);
@@ -297,6 +307,7 @@ private:
         usleep(500000);
         audio_capture_->flush();
         audio_capture_->setMuted(false);
+        if (led_) led_->setOff();
     }
 
     void speak(const std::string& text) {
@@ -364,6 +375,7 @@ private:
     bool running_;
     bool tts_played_ = false;
     std::time_t last_activity_;
+    LedController* led_;
     std::vector<schema::Message> context_;
     context::PromptComposer* composer_;
 };

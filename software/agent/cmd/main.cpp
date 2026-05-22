@@ -17,6 +17,7 @@
 #include "camera/pi_camera_capture.hpp"
 #include "voice/alsa_audio_capture.hpp"
 #include "voice/voice_engine.hpp"
+#include "voice/led_controller.hpp"
 #include "common/logger.hpp"
 
 int main() {
@@ -83,15 +84,25 @@ int main() {
     }
 
     voice::AlsaAudioCapture audio_capture("plughw:3,0", "plughw:3,0");  // ReSpeaker 2-Mics Pi HAT
+
+    // Initialize LED controller on GPIO12
+    voice::LedController led(12);
+    led.start();
+
+    // Set volume to 95%
+    system("amixer -c 3 set Speaker 95% 2>/dev/null");
+
+    audio_capture.setLedController(&led);
     voice::VoiceEngine voice_engine(
-        &llm_provider, &registry, &asr, &tts, &audio_capture, workDir);
+        &llm_provider, &registry, &asr, &tts, &audio_capture, workDir, &led);
 
     try {
         voice_engine.start();
     } catch (const std::exception& e) {
         logger::error("Main", std::string("VoiceEngine crashed: ") + e.what());
-        return 1;
     }
+
+    led.stop();
 
     if (nls_client) {
         AlibabaNls::NlsClient::releaseInstance();
