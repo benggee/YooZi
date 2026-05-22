@@ -18,6 +18,7 @@
 #include "context/composer.hpp"
 #include "vendor/nlohmann/json.hpp"
 #include "common/logger.hpp"
+#include "ui/ui_event_bus.hpp"
 
 namespace voice {
 
@@ -59,6 +60,7 @@ public:
         context_.push_back(sys);
 
         logger::info("VoiceEngine", "启动完成。说 \"你好柚子\" 或 \"柚子\" 来唤醒。");
+        ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
 
         audio_capture_->start();
 
@@ -91,6 +93,7 @@ private:
 
     void sleepLoop() {
         logger::info("VoiceEngine", "休眠中，等待唤醒词...");
+        ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
 
         while (running_ && state_ == SLEEPING) {
             std::string wav = audio_capture_->waitForUtterance(0);
@@ -104,9 +107,11 @@ private:
             }
 
             logger::info("VoiceEngine", "听到: " + asr.text);
+                ui::UIEventBus::instance().setAsrText(asr.text);
 
             if (containsWakeWord(asr.text)) {
                 logger::info("VoiceEngine", "唤醒成功！");
+                ui::UIEventBus::instance().setEngineState(ui::AWAKE);
 
                 // Reset conversation for new session
                 context_.erase(context_.begin() + 1, context_.end());
@@ -117,6 +122,7 @@ private:
                 // 切换到 AWAKE 状态并刷新 VAD
                 audio_capture_->flush();
                 state_ = AWAKE;
+                ui::UIEventBus::instance().setEngineState(ui::AWAKE);
                 last_activity_ = std::time(nullptr);
             } else {
                 // 不是唤醒词，关闭 LED
@@ -127,6 +133,7 @@ private:
 
     void awakeLoop() {
         logger::info("VoiceEngine", "已唤醒，正在监听...");
+        ui::UIEventBus::instance().setEngineState(ui::AWAKE);
 
         while (running_ && state_ == AWAKE) {
             int remaining = AWAKE_TIMEOUT_SECONDS
@@ -136,6 +143,7 @@ private:
                 speak("我先休息一下，需要的时候再叫我");
                 if (led_) led_->setOff();
                 state_ = SLEEPING;
+                ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
                 break;
             }
 
@@ -147,6 +155,7 @@ private:
                 speak("我先休息一下，需要的时候再叫我");
                 if (led_) led_->setOff();
                 state_ = SLEEPING;
+                ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
                 break;
             }
 
@@ -160,6 +169,7 @@ private:
 
             std::string user_text = asr.text;
             if (user_text.empty()) continue;
+            ui::UIEventBus::instance().setAsrText(user_text);
 
             // 检查退出词
             if (containsExitWord(user_text)) {
@@ -167,6 +177,7 @@ private:
                 speak("好的，需要的时候再叫我");
                 if (led_) led_->setOff();
                 state_ = SLEEPING;
+                ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
                 break;
             }
 
@@ -177,9 +188,11 @@ private:
             });
 
             if (led_) led_->setBreathing();  // 思考中 → 呼吸灯
+            ui::UIEventBus::instance().setEngineState(ui::THINKING);
             std::string response = runAgentTurn();
             if (!response.empty() && !tts_played_) {
                 logger::info("VoiceEngine", "Mose: " + response);
+                ui::UIEventBus::instance().setLlmText(response);
                 speak(response);
                 audio_capture_->flush();
             } else {
@@ -221,12 +234,15 @@ private:
 
             for (const auto& tc : resp.tool_calls) {
                 logger::info("VoiceEngine", "工具: " + tc.name + " 参数: " + tc.args);
+                ui::UIEventBus::instance().setToolCall(tc.name, tc.args);
                 schema::ToolResult result = registry_->execute(tc);
 
                 if (result.is_error) {
                     logger::error("VoiceEngine", "工具执行失败: " + tc.name + " " + result.output);
+                    ui::UIEventBus::instance().setToolResult(tc.name, true);
                 } else {
                     logger::info("VoiceEngine", "工具执行成功: " + tc.name);
+                    ui::UIEventBus::instance().setToolResult(tc.name, false);
                 }
 
                 schema::Message obs;
@@ -313,6 +329,7 @@ private:
     void speak(const std::string& text) {
         if (text.empty()) return;
 
+        ui::UIEventBus::instance().setEngineState(ui::SPEAKING);
         audio_capture_->setMuted(true);
 
         // Try streaming playback first
@@ -334,6 +351,7 @@ private:
                 audio_capture_->flush();
                 audio_capture_->setMuted(false);
                 if (led_) led_->setOff();
+                ui::UIEventBus::instance().setEngineState(ui::AWAKE);
                 return;
             }
 

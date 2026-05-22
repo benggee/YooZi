@@ -21,6 +21,7 @@
 #include "voice/voice_engine.hpp"
 #include "voice/led_controller.hpp"
 #include "common/logger.hpp"
+#include "ui/ftxui_display.hpp"
 
 // 获取二进制文件路径，向上查找项目根目录（包含 .yooz/skills 的目录）
 static std::string resolveProjectDir(const std::string& cwd) {
@@ -124,6 +125,16 @@ int main() {
     system("amixer -c 3 set Speaker 95% 2>/dev/null");
 
     audio_capture.setLedController(&led);
+
+    // Connect logger to UI event bus
+    logger::Logger::instance().setLogSink([](const std::string& line) {
+        ui::UIEventBus::instance().addLog(line);
+    });
+
+    // Start FTXUI display thread
+    ui::FtxuiDisplay display;
+    display.start();
+
     voice::VoiceEngine voice_engine(
         &llm_provider, &registry, &asr, &tts, &audio_capture, workDir, &led);
 
@@ -133,6 +144,7 @@ int main() {
         logger::error("Main", std::string("VoiceEngine crashed: ") + e.what());
     }
 
+    display.stop();
     led.stop();
 
     if (nls_client) {

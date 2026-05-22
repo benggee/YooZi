@@ -95,6 +95,8 @@ public:
         consecutive_silence_ = 0;
     }
 
+    float last_energy() const { return last_energy_; }
+
 private:
     float calcEnergy(const int16_t* samples, size_t count) {
         float sum = 0;
@@ -102,7 +104,9 @@ private:
             float s = static_cast<float>(samples[i]) / 32768.0f;
             sum += s * s;
         }
-        return sum / count * 10000.0f;
+        float result = sum / count * 10000.0f;
+        last_energy_ = result;
+        return result;
     }
 
     int sample_rate_;
@@ -115,6 +119,7 @@ private:
     int consecutive_silence_;
     int frame_size_;
     std::vector<int16_t> buffer_;
+    float last_energy_ = 0.0f;
     static const int PRE_BUFFER_FRAMES = 15; // 150ms pre-buffer
     std::vector<int16_t> pre_buffer_;
 };

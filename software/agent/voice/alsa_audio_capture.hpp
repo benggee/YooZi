@@ -16,6 +16,7 @@
 #include "voice/vad.hpp"
 #include "voice/wav_writer.hpp"
 #include "voice/led_controller.hpp"
+#include "ui/ui_event_bus.hpp"
 
 namespace voice {
 
@@ -231,6 +232,7 @@ private:
             std::lock_guard<std::mutex> lock(mutex_);
 
             vad_.process(buf.data(), frames);
+            ui::UIEventBus::instance().setVadEnergy(vad_.last_energy());
 
             // LED: user starts speaking → on
             if (!was_speaking && vad_.is_speaking()) {

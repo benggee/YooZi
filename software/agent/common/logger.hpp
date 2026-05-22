@@ -50,16 +50,24 @@ public:
             file_ << line << std::endl;
             file_.flush();
         }
+
+        if (log_sink_) {
+            log_sink_(line);
+        }
     }
 
+    using LogSink = void(*)(const std::string&);
+    void setLogSink(LogSink sink) { log_sink_ = sink; }
+
 private:
-    Logger() : level_(INFO) {}
+    Logger() : level_(INFO), log_sink_(nullptr) {}
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
     Level level_;
     std::ofstream file_;
     std::mutex mutex_;
+    LogSink log_sink_;
 };
 
 inline void debug(const std::string& tag, const std::string& msg) {
