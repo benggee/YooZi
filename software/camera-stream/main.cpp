@@ -177,11 +177,11 @@ int main(int argc, char* argv[]) {
             "application/json");
     });
 
-    // GET /snapshot — single JPEG frame
+    // GET /snapshot — single JPEG frame (waits for first frame)
     svr.Get("/snapshot", [&frame_buf](const httplib::Request&, httplib::Response& res) {
         std::vector<uint8_t> jpeg;
-        frame_buf.snapshot(jpeg);
-        if (jpeg.empty()) {
+        uint64_t last_seen = 0;
+        if (!frame_buf.get(jpeg, last_seen, 3000) || jpeg.empty()) {
             res.status = 503;
             res.set_content("{\"error\":\"no frame yet\"}", "application/json");
             return;
