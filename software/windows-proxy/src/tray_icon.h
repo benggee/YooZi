@@ -16,6 +16,8 @@ public:
 
 signals:
     void quitRequested();
+    void showMainWindowRequested();
+    void settingsRequested();
 
 private:
     void createIcon(bool connected);

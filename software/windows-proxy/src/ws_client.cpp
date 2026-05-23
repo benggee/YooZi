@@ -7,6 +7,8 @@ WSClient::WSClient(const QString& url, QObject* parent)
     connect(&ws_, &QWebSocket::disconnected, this, &WSClient::onDisconnected);
     connect(&ws_, &QWebSocket::textMessageReceived,
             this, &WSClient::onTextMessageReceived);
+    connect(&ws_, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
+            this, &WSClient::onError);
 
     reconnect_timer_.setInterval(5000);
     reconnect_timer_.setSingleShot(false);
@@ -61,4 +63,13 @@ void WSClient::onTextMessageReceived(const QString& message) {
 
 void WSClient::onPingTimeout() {
     sendMessage(protocol::toJson(protocol::makePing()));
+}
+
+void WSClient::setUrl(const QString& url) {
+    url_ = url;
+}
+
+void WSClient::onError(QAbstractSocket::SocketError error) {
+    Q_UNUSED(error);
+    emit errorOccurred(ws_.errorString());
 }

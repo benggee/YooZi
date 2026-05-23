@@ -1,4 +1,4 @@
-QT += core websockets network widgets
+QT += core websockets widgets
 
 CONFIG += c++17
 
@@ -9,13 +9,15 @@ SOURCES += \
     src/main.cpp \
     src/ws_client.cpp \
     src/command_executor.cpp \
-    src/ollama_client.cpp \
+    src/main_window.cpp \
+    src/settings_dialog.cpp \
     src/tray_icon.cpp
 
 HEADERS += \
     src/ws_client.h \
     src/command_executor.h \
-    src/ollama_client.h \
+    src/main_window.h \
+    src/settings_dialog.h \
     src/tray_icon.h \
     src/protocol.h
 

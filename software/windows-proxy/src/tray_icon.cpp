@@ -10,6 +10,14 @@ TrayIcon::TrayIcon(QObject* parent)
     status_action_->setEnabled(false);
     menu_.addSeparator();
 
+    QAction* showAction = menu_.addAction("Show Window");
+    connect(showAction, &QAction::triggered, this, &TrayIcon::showMainWindowRequested);
+
+    QAction* settingsAction = menu_.addAction("Settings");
+    connect(settingsAction, &QAction::triggered, this, &TrayIcon::settingsRequested);
+
+    menu_.addSeparator();
+
     QAction* quitAction = menu_.addAction("Quit");
     connect(quitAction, &QAction::triggered, this, &TrayIcon::quitRequested);
     connect(quitAction, &QAction::triggered, QApplication::instance(), &QApplication::quit);
