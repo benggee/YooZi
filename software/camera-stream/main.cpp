@@ -101,7 +101,6 @@ static void capture_loop(FrameBuffer& buf, const CaptureConfig& cfg) {
 
     while (g_running) {
         if (!cap.read(frame)) {
-            fprintf(stderr, "[capture] Frame grab failed, retrying...\n");
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
