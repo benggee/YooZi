@@ -18,8 +18,7 @@
 #include "speech/alibaba_speech_recognizer.hpp"
 #include "speech/alibaba_speech_synthesizer.hpp"
 #include "nlsClient.h"
-#include "camera/pi_camera_capture.hpp"
-#include "camera/http_camera_capture.hpp"
+#include "camera/fallback_camera_capture.hpp"
 #include "voice/alsa_audio_capture.hpp"
 #include "voice/voice_engine.hpp"
 #include "voice/led_controller.hpp"
@@ -73,15 +72,12 @@ int main() {
 
     provider::OpenAIProvider llm_provider("glm-5v-turbo");
 
-    std::unique_ptr<camera::CameraCapture> camera_capture;
-    const char* cam_url = std::getenv("CAMERA_STREAM_URL");
-    if (cam_url) {
-        camera_capture = std::make_unique<camera::HttpCameraCapture>(cam_url);
-        logger::info("Main", std::string("HTTP camera: ") + cam_url);
-    } else {
-        camera_capture = std::make_unique<camera::PiCameraCapture>();
-        logger::info("Main", "Direct PiCamera capture (fallback)");
+    std::string cam_url = "http://127.0.0.1:8080";
+    if (const char* env_url = std::getenv("CAMERA_STREAM_URL")) {
+        cam_url = env_url;
     }
+    auto camera_capture = std::make_unique<camera::FallbackCameraCapture>(cam_url);
+    logger::info("Main", "Camera: PiCamera + HTTP fallback (" + cam_url + ")");
 
     speech::AlibabaConfig alibaba_config;
     bool has_speech = true;

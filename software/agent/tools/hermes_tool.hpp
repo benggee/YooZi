@@ -36,9 +36,9 @@ public:
     schema::ToolDefinition definition() const override {
         return schema::ToolDefinition{
             "hermes_tool",
-            "向 Windows 电脑发送操作指令。当用户要求在电脑上执行任何操作时使用此工具，"
-            "包括但不限于：播放音乐、打开程序、搜索文档、编写代码、文件管理、"
-            "浏览器操作、系统设置等。这是操作远程电脑的首选工具。",
+            "操控 Windows 电脑的唯一工具。当用户请求涉及电脑操作时必须使用此工具，不要用 bash 代替。"
+            "适用场景：播放音乐、打开/关闭程序（VS Code、浏览器、微信等）、搜索文档、"
+            "文件管理、浏览器操作、系统设置等。bash 只能操作树莓派本机，不能操作 Windows 电脑。",
             R"({
                 "type": "object",
                 "properties": {
@@ -113,9 +113,15 @@ public:
         // Parse Hermes response
         try {
             auto hr = nlohmann::json::parse(resp.body);
-            result["status"] = "success";
-            result["delivery_id"] = hr.value("delivery_id", std::string());
-            result["message"] = "指令已发送到电脑";
+            std::string hr_status = hr.value("status", std::string());
+            if (hr_status == "ignored" || hr_status == "error") {
+                result["status"] = "error";
+                result["message"] = "电脑端未响应，请确认电脑已开机且 Hermes 服务正在运行";
+            } else {
+                result["status"] = "success";
+                result["delivery_id"] = hr.value("delivery_id", std::string());
+                result["message"] = "指令已发送到电脑";
+            }
         } catch (...) {
             result["status"] = "success";
             result["message"] = "指令已发送";

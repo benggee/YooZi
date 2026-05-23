@@ -1,31 +1,20 @@
 ---
 name: 音乐播放器
-description: 当用户要求播放音乐、安装音乐播放器、听歌、播放歌曲、停止播放时触发
+description: 当用户要求播放音乐、听歌、播放歌曲、停止播放、切换歌曲时触发
 ---
 
-## 安装（仅在首次使用或播放器未安装时执行）
+## 音乐播放路由
 
-检查并安装所需的播放器：
-`sudo apt-get install -y mpg123 alsa-utils`
+### 默认：在电脑上播放（hermes_tool）
+用户没有指定播放位置时，默认通过 hermes_tool 在 Windows 电脑上播放：
+- 播放音乐：hermes_tool {"intent": "打开网易云音乐并播放", "category": "music"}
+- 暂停/停止：hermes_tool {"intent": "停止音乐播放", "category": "music"}
+- 切歌：hermes_tool {"intent": "切换到下一首歌", "category": "music"}
 
-## 播放音乐
+### 用户明确说"本地"时：在树莓派上播放（bash）
+仅在用户说"本地播放"、"在树莓派上播放"时使用 bash：
+1. 安装（仅首次）：sudo apt-get install -y mpg123 alsa-utils
+2. 播放：pkill mpg123; mpg123 ~/music/*.mp3 &
+3. 停止：pkill mpg123
 
-1. 先停止可能正在播放的音乐：`pkill mpg123`
-
-2. 使用 mpg123 从 `~/music/` 目录按文件名顺序播放全部 MP3，命令末尾必须加 `&` 转入后台：
-   `mpg123 ~/music/*.mp3 &`
-   **注意**：bash 工具有 30 秒超时保护，播放音乐等常驻进程必须在命令末尾加 `&` 转入后台，否则会被系统强制终止。
-
-3. 告知用户正在播放 `~/music/` 目录下的全部音乐。
-
-## 停止播放
-
-使用 pkill 终止播放进程：
-`pkill mpg123`
-
-## 注意事项
-
-- 播放命令必须加 `&` 后台运行，绝不可以在前台运行。
-- 每次播放前，先 `pkill mpg123` 停止上一首。
-- 音乐文件固定存放在 `~/music/` 目录，无需搜索。
-- 你拥有 sudo 权限，可以直接使用 sudo 安装软件。
+注意：bash 播放命令必须加 & 后台运行。
