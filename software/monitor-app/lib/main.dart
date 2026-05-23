@@ -11,7 +11,7 @@ class MonitorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'YooZi Monitor',
+      title: 'YooZi See',
       theme: ThemeData(
         colorSchemeSeed: Colors.indigo,
         useMaterial3: true,

@@ -111,7 +111,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   Widget _buildNormal() {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('YooZi Monitor'),
+        title: const Text('YooZi See'),
         actions: [
           if (_connected)
             IconButton(
