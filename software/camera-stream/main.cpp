@@ -63,8 +63,8 @@ static void signal_handler(int) {
 struct CaptureConfig {
     int device_index = 0;
     std::string device_path;
-    int width = 1944;
-    int height = 1458;
+    int width = 640;
+    int height = 480;
     int fps = 15;
     int quality = 70;
 };

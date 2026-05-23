@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
+const int _maxFrameSize = 512 * 1024; // 512KB max per frame
+
 class MjpegStream extends StatefulWidget {
   final String url;
   final bool connected;
@@ -92,51 +94,64 @@ class _MjpegStreamState extends State<MjpegStream> {
         setState(() => _status = 'Connected');
       }
 
-      // JPEG SOI (0xFFD8) and EOI (0xFFD9) markers
-      final data = BytesBuilder();
+      final buffer = BytesBuilder(copy: false);
       bool inFrame = false;
+      int frameStart = 0;
 
       _subscription = response.listen(
         (chunk) {
           if (!_running) return;
-          data.add(chunk);
+          buffer.add(chunk);
 
-          final bytes = data.toBytes();
-          data.clear();
+          final bytes = Uint8List.fromList(buffer.toBytes());
+          buffer.clear();
 
           int i = 0;
           while (i < bytes.length - 1) {
             if (!inFrame) {
-              // Look for SOI
+              // Look for SOI (0xFF 0xD8) using bulk scan
               if (bytes[i] == 0xFF && bytes[i + 1] == 0xD8) {
                 inFrame = true;
-                data.addByte(0xFF);
-                data.addByte(0xD8);
+                frameStart = i;
                 i += 2;
                 continue;
               }
               i++;
             } else {
-              // Copy bytes, look for EOI
-              data.addByte(bytes[i]);
-              if (bytes[i] == 0xFF && i + 1 < bytes.length && bytes[i + 1] == 0xD9) {
-                data.addByte(0xD9);
-                final frame = data.toBytes();
-                data.clear();
-                inFrame = false;
-                // Only keep latest frame
-                if (mounted) {
-                  setState(() => _currentFrame = Uint8List.fromList(frame));
+              // Look for EOI (0xFF 0xD9)
+              if (bytes[i] == 0xFF && bytes[i + 1] == 0xD9) {
+                final frameSize = i + 2 - frameStart;
+
+                // Only accept frames within size limit
+                if (frameSize > 0 && frameSize <= _maxFrameSize) {
+                  final frame = Uint8List.sublistView(
+                      bytes, frameStart, i + 2);
+                  if (mounted) {
+                    setState(() => _currentFrame = frame);
+                  }
                 }
+
+                inFrame = false;
                 i += 2;
                 continue;
               }
               i++;
             }
           }
-          // Handle remaining byte
-          if (i < bytes.length && inFrame) {
-            data.addByte(bytes[i]);
+
+          // Keep remaining bytes (partial data)
+          if (inFrame && frameStart < bytes.length) {
+            final remaining = bytes.sublist(frameStart);
+            final currentSize = buffer.length;
+            if (currentSize + remaining.length <= _maxFrameSize) {
+              buffer.add(remaining);
+            } else {
+              // Frame too large, discard and reset
+              inFrame = false;
+            }
+          } else if (i < bytes.length && !inFrame) {
+            // Single remaining byte (could be 0xFF of a SOI)
+            buffer.addByte(bytes[i]);
           }
         },
         onDone: () {
