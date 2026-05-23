@@ -26,7 +26,7 @@ public:
 
 class CurlHttpClient : public HttpClient {
 public:
-    CurlHttpClient() : timeout_seconds_(600), connect_timeout_seconds_(30) {
+    CurlHttpClient() : timeout_seconds_(600), connect_timeout_seconds_(30), noproxy_(false) {
         curl_global_init(CURL_GLOBAL_DEFAULT);
     }
 
@@ -36,6 +36,7 @@ public:
 
     void set_timeout(long seconds) { timeout_seconds_ = seconds; }
     void set_connect_timeout(long seconds) { connect_timeout_seconds_ = seconds; }
+    void set_noproxy(bool enable) { noproxy_ = enable; }
 
     HttpResponse post(const std::string& url,
                       const std::string& body,
@@ -66,6 +67,10 @@ public:
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp.body);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
+        if (noproxy_) {
+            curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
+        }
+
         CURLcode res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             resp.status_code = 0;
@@ -84,6 +89,7 @@ public:
 private:
     long timeout_seconds_;
     long connect_timeout_seconds_;
+    bool noproxy_;
 
     static size_t write_callback(void* ptr, size_t size, size_t nmemb, void* userdata) {
         size_t total = size * nmemb;

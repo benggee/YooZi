@@ -208,6 +208,16 @@ private:
                 audio_capture_->flush();
             }
             tts_played_ = false;
+
+            // If music command was sent, return to SLEEPING
+            if (hermes_music_sent_) {
+                logger::info("VoiceEngine", "音乐指令已下发，进入休眠");
+                if (led_) led_->setOff();
+                state_ = SLEEPING;
+                ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
+                hermes_music_sent_ = false;
+                break;
+            }
         }
     }
 
@@ -320,6 +330,20 @@ private:
                         }
                     } catch (const std::exception& e) {
                         logger::error("VoiceEngine", std::string("播放TTS失败: ") + e.what());
+                    }
+                }
+
+                // Detect music command from hermes_tool
+                if (tc.name == "hermes_tool" && !tr.is_error) {
+                    try {
+                        auto tool_out = nlohmann::json::parse(tr.output);
+                        if (tool_out.value("category", "") == "music" &&
+                            tool_out.value("status", "") == "success") {
+                            hermes_music_sent_ = true;
+                            logger::info("VoiceEngine", "音乐指令已下发，将在回复后进入休眠");
+                        }
+                    } catch (const std::exception& e) {
+                        logger::error("VoiceEngine", std::string("解析hermes结果失败: ") + e.what());
                     }
                 }
 
@@ -493,6 +517,7 @@ private:
     State state_;
     bool running_;
     bool tts_played_ = false;
+    bool hermes_music_sent_ = false;
     std::time_t last_activity_;
     LedController* led_;
     std::vector<schema::Message> context_;
