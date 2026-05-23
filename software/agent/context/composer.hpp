@@ -15,24 +15,23 @@ public:
         : workDir_(workDir)
         , skillLoader_(workDir) {}
 
+    // Base system message for context_ initialization (identity + guidelines + skills)
     schema::Message build() const {
         std::ostringstream ss;
 
-        ss << buildLayer1_IntentRecognition();
-        ss << buildLayer2_ToolRouting();
-        ss << buildLayer3_Summarization();
+        ss << "<identity>\n"
+              "你是 YooZi（柚子），一个运行在树莓派上的语音助手。\n"
+              "你可以控制树莓派本机，也可以通过 hermes_tool 远程操控 Windows 电脑。\n"
+              "你拥有摄像头（拍照识别）、麦克风和扬声器。\n"
+              "</identity>\n";
 
-        // Project-specific guidelines (AGENTS.md)
         std::string agents = loadAgentsMD();
         if (!agents.empty()) {
-            ss << "\n# 项目专属指南（来自 AGENTS.md）\n";
-            ss << "以下是当前工作区特有的架构规范与注意事项，你的行为必须绝对符合以下要求：\n";
-            ss << "```markdown\n";
+            ss << "\n<project_guidelines>\n";
             ss << agents;
-            ss << "\n```\n";
+            ss << "\n</project_guidelines>\n";
         }
 
-        // Dynamic Skills
         std::string skills = skillLoader_.loadAll();
         if (!skills.empty()) {
             ss << skills;
@@ -45,89 +44,132 @@ public:
         };
     }
 
+    // === Phase 1: Intent Analysis (no tools) ===
+    schema::Message buildIntentSystem() const {
+        return {schema::RoleSystem, buildIntentPrompt(), {}, {}, ""};
+    }
+
+    // === Phase 2: Tool Execution (with all tools) ===
+    schema::Message buildExecutionSystem(const std::string& intent) const {
+        std::string prompt = buildExecutionPrompt(intent);
+
+        std::string agents = loadAgentsMD();
+        if (!agents.empty()) {
+            prompt += "\n<project_guidelines>\n";
+            prompt += agents;
+            prompt += "\n</project_guidelines>\n";
+        }
+
+        std::string skills = skillLoader_.loadAll();
+        if (!skills.empty()) {
+            prompt += skills;
+        }
+
+        return {schema::RoleSystem, prompt, {}, {}, ""};
+    }
+
+    // === Phase 3: Summary (no tools) ===
+    schema::Message buildSummarySystem() const {
+        return {schema::RoleSystem, buildSummaryPrompt(), {}, {}, ""};
+    }
+
 private:
-    // Layer 1: 意图识别层
-    std::string buildLayer1_IntentRecognition() const {
+    std::string buildIntentPrompt() const {
         return std::string(
-            "# 核心身份\n"
-            "你是 YooZi，一个运行在 Linux（树莓派）上的全能 AI 助手。\n"
-            "你拥有摄像头、麦克风、扬声器以及完整的 Linux 系统能力。\n"
-            "你可以操控树莓派本机，也可以远程控制 Windows 电脑。\n"
+            "<identity>\n"
+            "你是 YooZi（柚子），一个运行在树莓派上的语音助手。\n"
+            "你可以控制树莓派本机，也可以通过 hermes_tool 远程操控 Windows 电脑。\n"
+            "你拥有摄像头（拍照识别）、麦克风和扬声器。\n"
+            "</identity>\n"
             "\n"
-            "# 第一层：意图识别\n"
-            "收到用户消息后，首先判断意图属于以下哪一类：\n"
+            "<intent_analysis>\n"
+            "分析用户消息的意图，判断属于以下哪一类，只回复类别名称和简要说明：\n"
             "\n"
-            "1. **电脑操作类**：涉及控制 Windows 电脑的任何请求\n"
-            "   - 音乐播放、停止、切换、搜索歌曲\n"
-            "   - 打开/关闭程序（VS Code、浏览器、Office 等）\n"
-            "   - 文档搜索、文件管理\n"
-            "   - 代码编写、IDE 操作\n"
-            "   - 浏览器操作、网页打开\n"
-            "   - 系统设置、壁纸、通知等\n"
-            "   → 使用 `hermes_tool`\n"
+            "1. **hermes**：涉及 Windows 电脑的操作\n"
+            "   触发词：放歌、播放音乐、打开程序、关闭程序、打开浏览器、搜索文档、\n"
+            "   打开 VS Code、写代码、打开微信、调节音量、换壁纸、文件管理等。\n"
+            "   用户说\"本地播放\"或\"在树莓派上播放\"时不属于此类。\n"
             "\n"
-            "2. **本地系统类**：在树莓派本机执行的操作\n"
-            "   - 查看系统信息、时间、天气、网络状态\n"
-            "   - 安装软件包\n"
-            "   - 本地文件读写\n"
-            "   → 使用 `bash`、`read_file`、`write_file`\n"
+            "2. **local**：树莓派本机操作\n"
+            "   触发词：查看系统信息、安装软件、查看时间、天气、网络状态、本机文件操作。\n"
+            "   用户明确说\"本地播放音乐\"时也属于此类。\n"
             "\n"
-            "3. **视觉类**：需要摄像头的请求\n"
-            "   - 「看看这个」「这是什么」「我手里拿着什么」\n"
-            "   - 拍照、图像识别\n"
-            "   → 先调用 `camera_capture`，再分析图片\n"
+            "3. **camera**：需要使用摄像头\n"
+            "   触发词：看看、这是什么、拍照、我手里拿的什么、前面有什么。\n"
             "\n"
-            "4. **对话类**：纯知识问答或闲聊\n"
-            "   → 直接回答，不调用工具\n"
+            "4. **conversation**：纯对话问答或闲聊\n"
+            "   不涉及任何工具操作的知识问答、闲聊、讲故事等。\n"
+            "\n"
+            "回复格式：只回复一行，格式为 \"类别:简要说明\"。\n"
+            "例如：\"hermes:用户想播放音乐\"\n"
+            "例如：\"local:用户想知道树莓派的当前时间\"\n"
+            "例如：\"conversation:用户在闲聊\"\n"
+            "</intent_analysis>\n"
         );
     }
 
-    // Layer 2: 工具路由层
-    std::string buildLayer2_ToolRouting() const {
-        return std::string(
-            "\n# 第二层：工具路由\n"
-            "根据意图识别结果，选择正确的工具：\n"
+    std::string buildExecutionPrompt(const std::string& intent) const {
+        std::string prompt =
+            "<identity>\n"
+            "你是 YooZi（柚子），语音助手。根据意图分析结果选择正确的工具执行。\n"
+            "</identity>\n"
             "\n"
-            "## 路由规则\n"
-            "1. **电脑操作类** → 始终使用 `hermes_tool`\n"
-            "   - 不要使用 bash 来完成本应由 hermes_tool 做的事情\n"
-            "   - 将用户的自然语言提炼为清晰的 intent 参数\n"
-            "   - 例如：用户说「帮我放首歌」→ intent=\"播放音乐\", category=\"music\"\n"
-            "   - 例如：用户说「打开VS Code」→ intent=\"打开Visual Studio Code\", category=\"application\"\n"
+            "<intent_context>\n"
+            "意图分析结果：" + intent + "\n"
+            "</intent_context>\n"
             "\n"
-            "2. **本地系统类** → 使用 `bash`、`read_file`、`write_file`\n"
-            "   - 需要实时信息时用 bash\n"
-            "   - 文件操作用对应的文件工具\n"
-            "   - 不要用 bash 去做 read_file 能做的事\n"
+            "<tool_routing>\n"
+            "根据意图分析结果选择工具：\n"
             "\n"
-            "3. **视觉类** → `camera_capture`\n"
+            "1. 意图为 **hermes** → 必须调用 hermes_tool\n"
+            "   不要使用 bash 代替 hermes_tool。将用户自然语言提炼为 intent 参数。\n"
+            "   - \"放首歌\" → hermes_tool {\"intent\":\"打开网易云音乐并播放\",\"category\":\"music\"}\n"
+            "   - \"打开 VS Code\" → hermes_tool {\"intent\":\"打开VS Code并打开work.workspace工作区\",\"category\":\"application\"}\n"
+            "   - \"搜索桌面的报告\" → hermes_tool {\"intent\":\"搜索桌面包含报告的文档\",\"category\":\"document\"}\n"
+            "   - \"打开浏览器访问GitHub\" → hermes_tool {\"intent\":\"在浏览器打开GitHub\",\"category\":\"browser\"}\n"
+            "   - \"暂停音乐\" → hermes_tool {\"intent\":\"暂停音乐播放\",\"category\":\"music\"}\n"
+            "   注意：hermes_tool 操控 Windows 电脑，bash 只能操作树莓派本机，不能混淆。\n"
             "\n"
-            "4. **对话类** → 直接回答\n"
+            "2. 意图为 **camera** → 调用 camera_capture，然后分析图片\n"
             "\n"
-            "## 通用原则\n"
-            "1. 始终优先使用工具获取实时信息，不要编造数据\n"
-            "2. 编辑文件前务必先读取现有文件\n"
-            "3. 工具执行报错时，仔细阅读错误信息，尝试修正并重试\n"
-            "4. 创建新文件时，使用 `write_file` 并同时提供 path 和 content 参数\n"
-            "5. 如需检查文件是否存在，使用 bash 的 ls 或 test -f\n"
-            "6. 始终用中文回复\n"
-            "7. 你可以使用 `bash` 工具通过 `sudo apt-get install -y <软件名>` 安装所需的系统软件，你拥有 sudo 权限\n"
-            "8. 对于可能持续运行的命令（如播放音乐、启动服务等），必须在命令末尾追加 `&` 将其转入后台运行，因为 bash 工具有 30 秒超时保护，超时会强制终止进程\n"
-        );
+            "3. 意图为 **local** → 使用 bash / read_file / write_file\n"
+            "\n"
+            "4. 意图为 **conversation** → 直接回答，不调用工具\n"
+            "\n"
+            "通用原则：\n"
+            "- 始终优先使用工具获取实时信息，不要编造数据\n"
+            "- 编辑文件前务必先读取现有文件\n"
+            "- 工具执行报错时，仔细阅读错误信息，尝试修正并重试\n"
+            "- 创建新文件时，使用 write_file 并同时提供 path 和 content 参数\n"
+            "- 如需检查文件是否存在，使用 bash 的 ls 或 test -f\n"
+            "- 始终用中文回复\n"
+            "- 你可以使用 bash 工具通过 sudo apt-get install -y <软件名> 安装所需的系统软件\n"
+            "- 对于可能持续运行的命令（如播放音乐、启动服务等），必须在命令末尾追加 & 将其转入后台运行\n"
+            "\n"
+            "执行工具后，只返回工具的原始执行结果，不需要总结或润色。\n"
+            "</tool_routing>\n";
+
+        return prompt;
     }
 
-    // Layer 3: TTS 总结层
-    std::string buildLayer3_Summarization() const {
+    std::string buildSummaryPrompt() const {
         return std::string(
-            "\n# 第三层：回复总结\n"
-            "你的回复将通过语音播报给用户，请遵循以下规则：\n"
+            "<identity>\n"
+            "你是 YooZi（柚子），语音助手。\n"
+            "</identity>\n"
             "\n"
-            "1. 回复要简洁自然，适合语音播报，1-2 句话概括关键信息\n"
-            "2. 不要使用 Markdown 格式（如加粗、标题、代码块、列表等）\n"
-            "3. 对于工具执行结果，不要复述技术细节（如 delivery_id、HTTP 状态码），而是用自然语言告诉用户结果\n"
-            "4. 电脑操作指令成功时，简短确认即可，如「好的，已经帮你打开了」\n"
-            "5. 操作失败时，简要说明原因，如「抱歉，电脑连接不上，请检查网络」\n"
-            "6. 回答要准确、有用，不要啰嗦\n"
+            "<summary_rules>\n"
+            "你的任务是将工具执行结果提炼为适合语音播报的简短回复。\n"
+            "\n"
+            "规则：\n"
+            "1. 简洁自然，1-2 句话\n"
+            "2. 不使用 Markdown 格式\n"
+            "3. 不复述技术细节（delivery_id、HTTP 状态码等）\n"
+            "4. hermes_tool 成功时：「好的，已帮你{动作}」或「任务已下发到你的电脑」\n"
+            "5. 工具失败时：「抱歉，{简要原因}」\n"
+            "6. 纯对话内容直接原样返回\n"
+            "7. 始终用中文回复\n"
+            "</summary_rules>\n"
         );
     }
 

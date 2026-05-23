@@ -81,6 +81,12 @@ public:
 private:
     enum State { SLEEPING, AWAKE };
 
+    struct ExecutionResult {
+        bool has_tool_calls;
+        std::string content;       // LLM final text (when no tool calls)
+        std::string tool_results;  // Aggregated tool results text
+    };
+
     void runLoop() {
         while (running_) {
             if (state_ == SLEEPING) {
@@ -202,58 +208,121 @@ private:
                 audio_capture_->flush();
             }
             tts_played_ = false;
+
+            // If music command was sent, return to SLEEPING
+            if (hermes_music_sent_) {
+                logger::info("VoiceEngine", "音乐指令已下发，进入休眠");
+                if (led_) led_->setOff();
+                state_ = SLEEPING;
+                ui::UIEventBus::instance().setEngineState(ui::SLEEPING);
+                hermes_music_sent_ = false;
+                break;
+            }
         }
     }
 
+    // === Three-Phase Agent Turn ===
+
     std::string runAgentTurn() {
+        std::string user_text = context_.back().content;
+
+        // === Phase 1: Intent Analysis (no tools) ===
+        std::string intent = runIntentPhase(user_text);
+        logger::info("VoiceEngine", "意图分析结果: " + intent);
+
+        // If pure conversation, answer directly (no tools)
+        if (intent.find("conversation") == 0) {
+            return runConversationPhase(user_text);
+        }
+
+        // === Phase 2: Tool Execution (with all tools) ===
+        ExecutionResult exec = runExecutionPhase(user_text, intent);
+
+        // If no tool calls, or execution produced a final text response, return it directly
+        if (!exec.has_tool_calls || !exec.content.empty()) {
+            return exec.content;
+        }
+
+        // === Phase 3: Summary (no tools) ===
+        return runSummaryPhase(user_text, exec.tool_results);
+    }
+
+    // Phase 1: Analyze user intent without any tools
+    std::string runIntentPhase(const std::string& user_text) {
+        std::vector<schema::Message> intent_ctx;
+        intent_ctx.push_back(composer_->buildIntentSystem());
+        intent_ctx.push_back({schema::RoleUser, user_text, {}, {}, ""});
+
+        schema::Message resp;
+        try {
+            resp = provider_->generate(intent_ctx, {});
+        } catch (const std::exception& e) {
+            logger::error("VoiceEngine", "意图分析失败: " + std::string(e.what()));
+            return "conversation:意图分析失败";
+        }
+        return resp.content;
+    }
+
+    // Phase 2: Execute tools based on intent
+    ExecutionResult runExecutionPhase(const std::string& user_text,
+                                       const std::string& intent) {
         std::vector<schema::ToolDefinition> tools = registry_->get_available_tools();
-        std::string final_text;
-        int max_turns = 10;
+        std::vector<schema::Message> exec_ctx;
+        exec_ctx.push_back(composer_->buildExecutionSystem(intent));
+        exec_ctx.push_back({schema::RoleUser, user_text, {}, {}, ""});
 
-        for (int turn = 0; turn < max_turns; turn++) {
-            logger::info("VoiceEngine", "Agent turn " + std::to_string(turn + 1) + " start");
+        ExecutionResult result;
+        result.has_tool_calls = false;
+        std::ostringstream results_ss;
 
-            pruneVisionContext();
+        for (int turn = 0; turn < 10; turn++) {
+            logger::info("VoiceEngine", "执行阶段 turn " + std::to_string(turn + 1));
 
             schema::Message resp;
             try {
-                resp = provider_->generate(context_, tools);
+                resp = provider_->generate(exec_ctx, tools);
             } catch (const std::exception& e) {
-                logger::error("VoiceEngine", "LLM错误: " + std::string(e.what()));
-                return "抱歉，我遇到了一些问题";
+                logger::error("VoiceEngine", "执行阶段LLM错误: " + std::string(e.what()));
+                result.content = "抱歉，执行时遇到问题";
+                return result;
             }
 
-            context_.push_back(resp);
-
             if (resp.tool_calls.empty()) {
-                final_text = resp.content;
+                result.content = resp.content;
                 break;
             }
 
-            logger::info("VoiceEngine", "执行 " + std::to_string(resp.tool_calls.size()) + " 个工具...");
+            result.has_tool_calls = true;
+            exec_ctx.push_back(resp);
 
             for (const auto& tc : resp.tool_calls) {
                 logger::info("VoiceEngine", "工具: " + tc.name + " 参数: " + tc.args);
                 ui::UIEventBus::instance().setToolCall(tc.name, tc.args);
-                schema::ToolResult result = registry_->execute(tc);
+                schema::ToolResult tr = registry_->execute(tc);
 
-                if (result.is_error) {
-                    logger::error("VoiceEngine", "工具执行失败: " + tc.name + " " + result.output);
+                if (tr.is_error) {
+                    logger::error("VoiceEngine", "工具执行失败: " + tc.name + " " + tr.output);
                     ui::UIEventBus::instance().setToolResult(tc.name, true);
                 } else {
                     logger::info("VoiceEngine", "工具执行成功: " + tc.name);
                     ui::UIEventBus::instance().setToolResult(tc.name, false);
                 }
 
+                results_ss << "工具 " << tc.name << ": "
+                           << (tr.is_error ? "失败 - " : "成功 - ")
+                           << tr.output << "\n";
+
+                // Observation message
                 schema::Message obs;
                 obs.role = schema::RoleUser;
-                obs.content = result.output;
+                obs.content = tr.output;
                 obs.tool_call_id = tc.id;
-                context_.push_back(obs);
+                exec_ctx.push_back(obs);
 
-                if (tc.name == "text_to_speech" && !result.is_error) {
+                // TTS playback
+                if (tc.name == "text_to_speech" && !tr.is_error) {
                     try {
-                        auto tool_out = nlohmann::json::parse(result.output);
+                        auto tool_out = nlohmann::json::parse(tr.output);
                         std::string output_file = tool_out.value("output_file", "");
                         if (!output_file.empty()) {
                             playTtsFile(output_file);
@@ -264,21 +333,36 @@ private:
                     }
                 }
 
-                if (tc.name == "camera_capture" && !result.is_error) {
+                // Detect music command from hermes_tool
+                if (tc.name == "hermes_tool" && !tr.is_error) {
                     try {
-                        auto tool_out = nlohmann::json::parse(result.output);
+                        auto tool_out = nlohmann::json::parse(tr.output);
+                        if (tool_out.value("category", "") == "music" &&
+                            tool_out.value("status", "") == "success") {
+                            hermes_music_sent_ = true;
+                            logger::info("VoiceEngine", "音乐指令已下发，将在回复后进入休眠");
+                        }
+                    } catch (const std::exception& e) {
+                        logger::error("VoiceEngine", std::string("解析hermes结果失败: ") + e.what());
+                    }
+                }
+
+                // Camera vision injection
+                if (tc.name == "camera_capture" && !tr.is_error) {
+                    try {
+                        auto tool_out = nlohmann::json::parse(tr.output);
                         std::string b64 = tool_out.value("base64", "");
                         if (!b64.empty()) {
                             schema::Message vision_msg;
                             vision_msg.role = schema::RoleUser;
                             vision_msg.content_parts.push_back(schema::ContentPart{
-                                schema::ContentPart::IMAGE_URL, "", b64
+                                schema::ContentPart::IMAGE_URL, "", "data:image/jpeg;base64," + b64
                             });
                             vision_msg.content_parts.push_back(schema::ContentPart{
                                 schema::ContentPart::TEXT,
                                 "这是你面前的摄像头刚刚拍下的照片，照片中的人就是正在和你说话的用户。请用第二人称简短描述用户正在做什么，一两句话即可。", ""
                             });
-                            context_.push_back(vision_msg);
+                            exec_ctx.push_back(vision_msg);
                         }
                     } catch (const std::exception& e) {
                         logger::error("VoiceEngine", std::string("解析相机结果失败: ") + e.what());
@@ -287,30 +371,43 @@ private:
             }
         }
 
-        return final_text;
+        result.tool_results = results_ss.str();
+        return result;
     }
 
-    void pruneVisionContext() {
-        int last_vision_idx = -1;
-        for (int i = 0; i < static_cast<int>(context_.size()); i++) {
-            if (!context_[i].content_parts.empty()) {
-                last_vision_idx = i;
-            }
+    // Phase 3: Summarize tool results for voice playback
+    std::string runSummaryPhase(const std::string& user_text,
+                                 const std::string& tool_results) {
+        std::vector<schema::Message> summary_ctx;
+        summary_ctx.push_back(composer_->buildSummarySystem());
+        summary_ctx.push_back({schema::RoleUser,
+            "用户说：「" + user_text + "」\n\n工具执行结果：\n" + tool_results,
+            {}, {}, ""});
+
+        schema::Message resp;
+        try {
+            resp = provider_->generate(summary_ctx, {});
+        } catch (const std::exception& e) {
+            logger::error("VoiceEngine", "总结阶段失败: " + std::string(e.what()));
+            return "操作已完成";
         }
-        for (int i = 0; i < last_vision_idx; i++) {
-            if (!context_[i].content_parts.empty()) {
-                std::string summary;
-                for (const auto& part : context_[i].content_parts) {
-                    if (part.type == schema::ContentPart::TEXT) {
-                        summary += part.text;
-                    } else {
-                        summary += "[照片已分析]";
-                    }
-                }
-                context_[i].content = summary;
-                context_[i].content_parts.clear();
-            }
+        return resp.content;
+    }
+
+    // Conversation: direct answer without tools
+    std::string runConversationPhase(const std::string& user_text) {
+        std::vector<schema::Message> ctx;
+        ctx.push_back(composer_->buildSummarySystem());
+        ctx.push_back({schema::RoleUser, user_text, {}, {}, ""});
+
+        schema::Message resp;
+        try {
+            resp = provider_->generate(ctx, {});
+        } catch (const std::exception& e) {
+            logger::error("VoiceEngine", "对话阶段失败: " + std::string(e.what()));
+            return "抱歉，我遇到了一些问题";
         }
+        return resp.content;
     }
 
     void playTtsFile(const std::string& wav_path) {
@@ -420,6 +517,7 @@ private:
     State state_;
     bool running_;
     bool tts_played_ = false;
+    bool hermes_music_sent_ = false;
     std::time_t last_activity_;
     LedController* led_;
     std::vector<schema::Message> context_;

@@ -49,8 +49,8 @@ public:
         }
 
         std::ostringstream ss;
-        ss << "\n### 可用专业技能 (Agent Skills)\n";
-        ss << "以下是你拥有的标准化外挂技能，请在符合description描述的场景下严格遵循其正文指令:\n\n";
+        ss << "\n<skills>\n";
+        ss << "以下是外挂技能。在不违反 <tool_routing> 的前提下按技能描述执行：\n\n";
 
         for (const auto& filePath : skillFiles) {
             std::ifstream file(filePath);
@@ -60,11 +60,13 @@ public:
             content << file.rdbuf();
             Skill skill = parseSkillMD(content.str());
 
-            ss << "#### 技能名称:" << skill.name << "\n";
-            ss << "**触发条件**:" << skill.description << "\n\n";
-            ss << "**执行指南**:\n";
-            ss << skill.body << "\n\n---\n";
+            ss << "<skill name=\"" << skill.name << "\">\n";
+            ss << "触发条件：" << skill.description << "\n\n";
+            ss << skill.body << "\n";
+            ss << "</skill>\n\n";
         }
+
+        ss << "</skills>\n";
 
         std::string result = ss.str();
         if (result.size() < 100) {

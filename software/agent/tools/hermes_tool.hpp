@@ -2,8 +2,6 @@
 
 #include <string>
 #include <cstdlib>
-#include <ctime>
-#include <sstream>
 
 #include "tools/base_tool.hpp"
 #include "anthropic/http/http_client.hpp"
@@ -27,6 +25,7 @@ public:
         }
         http_client_.set_timeout(15);
         http_client_.set_connect_timeout(5);
+        http_client_.set_noproxy(true);
     }
 
     std::string name() const override {
@@ -36,15 +35,15 @@ public:
     schema::ToolDefinition definition() const override {
         return schema::ToolDefinition{
             "hermes_tool",
-            "向 Windows 电脑发送操作指令。当用户要求在电脑上执行任何操作时使用此工具，"
-            "包括但不限于：播放音乐、打开程序、搜索文档、编写代码、文件管理、"
-            "浏览器操作、系统设置等。这是操作远程电脑的首选工具。",
+            "操控 Windows 电脑的通用工具。当用户请求涉及电脑操作时使用此工具，不要用 bash 代替。"
+            "适用场景：播放音乐、打开/关闭程序、搜索网页、打开代码文件、文件管理、系统设置等。"
+            "bash 只能操作树莓派本机，不能操作 Windows 电脑。",
             R"({
                 "type": "object",
                 "properties": {
                     "intent": {
                         "type": "string",
-                        "description": "提炼后的操作指令，描述要在电脑上执行的具体操作。例如：'播放周杰伦的歌曲'、'打开VS Code编辑main.py'、'搜索桌面上包含报告的文档'、'在浏览器打开GitHub'"
+                        "description": "提炼后的操作指令，描述要在电脑上执行的具体操作。例如：'播放周杰伦的歌曲'、'打开Chrome浏览器搜索今天的天气'、'打开VSCode的work.workspace工作区，找到并打开文件main.py'、'搜索桌面上包含报告的文档'、'在浏览器打开GitHub'"
                     },
                     "category": {
                         "type": "string",
@@ -74,14 +73,7 @@ public:
 
         // Build request body
         nlohmann::json body;
-        body["event"] = "yoozi_command";
-        body["intent"] = intent;
-        body["category"] = category;
-
-        std::time_t now = std::time(nullptr);
-        char timebuf[64];
-        std::strftime(timebuf, sizeof(timebuf), "%Y-%m-%dT%H:%M:%S", std::gmtime(&now));
-        body["timestamp"] = timebuf;
+        body["message"] = intent;
 
         std::string body_str = body.dump();
 
@@ -89,7 +81,7 @@ public:
         std::vector<std::pair<std::string, std::string>> headers;
         headers.push_back({"Content-Type", "application/json"});
         headers.push_back({"X-Gitlab-Token", webhook_token_});
-        headers.push_back({"X-Gitlab-Event", "yoozi_command"});
+        headers.push_back({"X-Gitlab-Event", "test"});
 
         logger::info("HermesTool", "POST " + webhook_url_ + " body: " + body_str);
 
@@ -98,6 +90,7 @@ public:
         logger::info("HermesTool", "Response: " + std::to_string(resp.status_code) + " " + resp.body);
 
         nlohmann::json result;
+        result["category"] = category;
         if (resp.status_code == 0) {
             result["status"] = "error";
             result["message"] = "网络错误，无法连接到电脑";
@@ -113,9 +106,15 @@ public:
         // Parse Hermes response
         try {
             auto hr = nlohmann::json::parse(resp.body);
-            result["status"] = "success";
-            result["delivery_id"] = hr.value("delivery_id", std::string());
-            result["message"] = "指令已发送到电脑";
+            std::string hr_status = hr.value("status", std::string());
+            if (hr_status == "ignored" || hr_status == "error") {
+                result["status"] = "error";
+                result["message"] = "电脑端未响应，请确认电脑已开机且 Hermes 服务正在运行";
+            } else {
+                result["status"] = "success";
+                result["delivery_id"] = hr.value("delivery_id", std::string());
+                result["message"] = "指令已发送到电脑";
+            }
         } catch (...) {
             result["status"] = "success";
             result["message"] = "指令已发送";
