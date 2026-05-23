@@ -220,11 +220,14 @@ class _MonitorScreenState extends State<MonitorScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Text(
-                        _streamStatus == 'Connected'
-                            ? 'Connected to ${_ipController.text}:${_portController.text}'
-                            : _streamStatus,
-                        style: Theme.of(context).textTheme.bodySmall,
+                      Expanded(
+                        child: Text(
+                          _streamStatus == 'Connected'
+                              ? 'Connected to ${_ipController.text}:${_portController.text}'
+                              : _streamStatus,
+                          style: Theme.of(context).textTheme.bodySmall,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                   ),

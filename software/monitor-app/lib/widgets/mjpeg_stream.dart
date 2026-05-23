@@ -209,6 +209,7 @@ class _MjpegStreamState extends State<MjpegStream> {
         _currentFrame!,
         gaplessPlayback: true,
         fit: BoxFit.contain,
+        errorBuilder: (_, __) => const SizedBox.shrink(),
       );
     }
 
