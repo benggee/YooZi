@@ -13,8 +13,7 @@
 #include "tools/camera_tool.hpp"
 #include "tools/speech_to_text_tool.hpp"
 #include "tools/text_to_speech_tool.hpp"
-#include "tools/windows_agent_tool.hpp"
-#include "ws/ws_server.hpp"
+#include "tools/hermes_tool.hpp"
 #include "speech/alibaba_config.hpp"
 #include "speech/alibaba_speech_recognizer.hpp"
 #include "speech/alibaba_speech_synthesizer.hpp"
@@ -114,15 +113,9 @@ int main() {
     registry.registry(&bash_tool);
     registry.registry(&camera_tool);
 
-    // WebSocket server for Windows proxy
-    ws::WSServer ws_server(8765);
-    tools::WindowsAgentTool windows_agent_tool(&ws_server);
-    registry.registry(&windows_agent_tool);
-
-    ws_server.onMessage([&windows_agent_tool](const std::string& cid, const std::string& msg) {
-        windows_agent_tool.handleResponse(cid, msg);
-    });
-    ws_server.start();
+    // Hermes webhook for Windows computer control
+    tools::HermesTool hermes_tool;
+    registry.registry(&hermes_tool);
 
     tools::SpeechToTextTool stt_tool(&asr);
     tools::TextToSpeechTool tts_tool(&tts);
@@ -167,7 +160,6 @@ int main() {
     }
 
     display.stop();
-    ws_server.stop();
     led.stop();
 
     if (nls_client) {

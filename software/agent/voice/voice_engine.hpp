@@ -54,8 +54,8 @@ public:
         context_.clear();
 
         schema::Message sys = composer_->build();
-        sys.content += "\n\n## 语音模式专属指南\n"
-            "当前为语音对话模式，回答要简洁自然，适合语音播报，不要使用 Markdown 格式。\n"
+        sys.content += "\n\n## 语音模式\n"
+            "当前为语音对话模式。\n"
             "始终优先使用工具获取实时信息，不要编造数据。\n";
         context_.push_back(sys);
 
