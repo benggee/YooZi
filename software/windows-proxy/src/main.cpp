@@ -13,7 +13,7 @@ int main(int argc, char* argv[]) {
     app.setQuitOnLastWindowClosed(false);
 
     QSettings settings("YooZi", "WindowsProxy");
-    QString piHost = settings.value("pi_host", "raspberrypi.local").toString();
+    QString piHost = settings.value("pi_host", "192.168.0.105").toString();
     QString wsUrl = QString("ws://%1:8765").arg(piHost);
 
     WSClient wsClient(wsUrl);

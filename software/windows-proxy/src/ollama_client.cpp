@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QEventLoop>
 #include <QElapsedTimer>
+#include <QTimer>
 
 static const char* kSystemPrompt =
     "You are a Windows command interpreter. The user will describe what they want to do on Windows. "

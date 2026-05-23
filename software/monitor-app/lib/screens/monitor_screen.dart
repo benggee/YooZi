@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../widgets/mjpeg_stream.dart';
 
@@ -22,9 +23,24 @@ class _MonitorScreenState extends State<MonitorScreen> {
   }
 
   void _toggleConnection() {
+    final ip = _ipController.text.trim();
+    final port = _portController.text.trim();
+
+    if (ip.isEmpty || port.isEmpty) {
+      if (kDebugMode) {
+        print('MonitorScreen: Cannot connect - IP: "$ip", Port: "$port"');
+      }
+      return;
+    }
+
     setState(() {
       _connected = !_connected;
     });
+
+    if (kDebugMode) {
+      print('MonitorScreen: Connection toggled, connected: $_connected');
+      print('MonitorScreen: Stream URL: $_streamUrl');
+    }
   }
 
   void _toggleFullscreen() {
@@ -39,7 +55,20 @@ class _MonitorScreenState extends State<MonitorScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _ipController.addListener(_onTextChanged);
+    _portController.addListener(_onTextChanged);
+  }
+
+  void _onTextChanged() {
+    setState(() {});
+  }
+
+  @override
   void dispose() {
+    _ipController.removeListener(_onTextChanged);
+    _portController.removeListener(_onTextChanged);
     _ipController.dispose();
     _portController.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -159,7 +188,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
                     ),
                     const SizedBox(width: 12),
                     FilledButton.icon(
-                      onPressed: _ipController.text.isEmpty && !_connected
+                      onPressed: (_ipController.text.trim().isEmpty ||
+                                  _portController.text.trim().isEmpty) &&
+                              !_connected
                           ? null
                           : _toggleConnection,
                       icon: Icon(_connected ? Icons.stop : Icons.play_arrow),

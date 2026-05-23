@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 class MjpegStream extends StatefulWidget {
   final String url;
@@ -23,7 +24,7 @@ class _MjpegStreamState extends State<MjpegStream> {
   Uint8List? _currentFrame;
   String _status = 'Disconnected';
   bool _running = false;
-  StreamSubscription<Uint8List>? _subscription;
+  StreamSubscription<List<int>>? _subscription;
   HttpClient? _httpClient;
 
   @override
@@ -58,6 +59,9 @@ class _MjpegStreamState extends State<MjpegStream> {
     _httpClient = HttpClient();
     _httpClient!.connectionTimeout = const Duration(seconds: 5);
 
+    if (kDebugMode) {
+      print('MjpegStream: Starting connection to ${widget.url}');
+    }
     _connect().catchError((_) {});
   }
 
@@ -66,8 +70,18 @@ class _MjpegStreamState extends State<MjpegStream> {
 
     try {
       final uri = Uri.parse(widget.url);
+      if (kDebugMode) {
+        print('MjpegStream: Connecting to $uri');
+      }
       final request = await _httpClient!.getUrl(uri);
+      if (kDebugMode) {
+        print('MjpegStream: Request sent, waiting for response...');
+      }
       final response = await request.close();
+
+      if (kDebugMode) {
+        print('MjpegStream: Response received, status: ${response.statusCode}');
+      }
 
       if (response.statusCode != 200) {
         _onError('HTTP ${response.statusCode}');
@@ -140,6 +154,9 @@ class _MjpegStreamState extends State<MjpegStream> {
 
   void _onError(String msg) {
     if (!mounted || !_running) return;
+    if (kDebugMode) {
+      print('MjpegStream: Error - $msg');
+    }
     setState(() => _status = msg);
     _running = false;
     widget.onDisconnected?.call();
