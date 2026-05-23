@@ -1,4 +1,4 @@
-name: monitor_app
+name: YooZi Monitor 
 description: Raspberry Pi camera monitor app
 publish_to: 'none'
 version: 1.0.0
