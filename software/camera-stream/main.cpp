@@ -63,8 +63,8 @@ static void signal_handler(int) {
 struct CaptureConfig {
     int device_index = 0;
     std::string device_path;
-    int width = 640;
-    int height = 480;
+    int width = 1944;
+    int height = 1458;
     int fps = 15;
     int quality = 70;
 };
@@ -105,6 +105,9 @@ static void capture_loop(FrameBuffer& buf, const CaptureConfig& cfg) {
             continue;
         }
         if (frame.empty()) continue;
+
+        // 逆时针旋转 90 度以修正画面方向
+        cv::rotate(frame, frame, cv::ROTATE_90_COUNTERCLOCKWISE);
 
         std::vector<uint8_t> jpeg_buf;
         if (cv::imencode(".jpg", frame, jpeg_buf, params)) {

@@ -7,13 +7,13 @@ import 'package:flutter/foundation.dart';
 class MjpegStream extends StatefulWidget {
   final String url;
   final bool connected;
-  final VoidCallback? onDisconnected;
+  final void Function(String status)? onStatusChanged;
 
   const MjpegStream({
     super.key,
     required this.url,
     required this.connected,
-    this.onDisconnected,
+    this.onStatusChanged,
   });
 
   @override
@@ -157,9 +157,14 @@ class _MjpegStreamState extends State<MjpegStream> {
     if (kDebugMode) {
       print('MjpegStream: Error - $msg');
     }
-    setState(() => _status = msg);
     _running = false;
-    widget.onDisconnected?.call();
+    if (mounted) {
+      setState(() {
+        _status = msg;
+        _currentFrame = null;
+      });
+    }
+    widget.onStatusChanged?.call(msg);
     // Auto-reconnect after 2 seconds
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted && widget.connected) {

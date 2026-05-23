@@ -15,6 +15,7 @@ class _MonitorScreenState extends State<MonitorScreen> {
   final _portController = TextEditingController(text: '8080');
   bool _connected = false;
   bool _fullscreen = false;
+  String _streamStatus = 'Disconnected';
 
   String get _streamUrl {
     final ip = _ipController.text.trim();
@@ -35,6 +36,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
 
     setState(() {
       _connected = !_connected;
+      if (!_connected) {
+        _streamStatus = 'Disconnected';
+      }
     });
 
     if (kDebugMode) {
@@ -94,6 +98,9 @@ class _MonitorScreenState extends State<MonitorScreen> {
             child: MjpegStream(
               url: _streamUrl,
               connected: _connected,
+              onStatusChanged: (status) {
+                if (mounted) setState(() => _streamStatus = status);
+              },
             ),
           ),
         ),
@@ -124,8 +131,8 @@ class _MonitorScreenState extends State<MonitorScreen> {
                   ? MjpegStream(
                       url: _streamUrl,
                       connected: _connected,
-                      onDisconnected: () {
-                        if (mounted) setState(() => _connected = false);
+                      onStatusChanged: (status) {
+                        if (mounted) setState(() => _streamStatus = status);
                       },
                     )
                   : const Center(
@@ -205,14 +212,18 @@ class _MonitorScreenState extends State<MonitorScreen> {
                       Container(
                         width: 8,
                         height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.green,
+                        decoration: BoxDecoration(
+                          color: _streamStatus == 'Connected'
+                              ? Colors.green
+                              : Colors.orange,
                           shape: BoxShape.circle,
                         ),
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        'Connected to ${_ipController.text}:${_portController.text}',
+                        _streamStatus == 'Connected'
+                            ? 'Connected to ${_ipController.text}:${_portController.text}'
+                            : _streamStatus,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
