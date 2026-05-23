@@ -124,8 +124,8 @@ class _MjpegStreamState extends State<MjpegStream> {
 
                 // Only accept frames within size limit
                 if (frameSize > 0 && frameSize <= _maxFrameSize) {
-                  final frame = Uint8List.sublistView(
-                      bytes, frameStart, i + 2);
+                  final frame = Uint8List.fromList(
+                      bytes.sublist(frameStart, i + 2));
                   if (mounted) {
                     setState(() => _currentFrame = frame);
                   }
@@ -145,6 +145,7 @@ class _MjpegStreamState extends State<MjpegStream> {
             final currentSize = buffer.length;
             if (currentSize + remaining.length <= _maxFrameSize) {
               buffer.add(remaining);
+              frameStart = 0; // SOI is now at position 0 in next chunk
             } else {
               // Frame too large, discard and reset
               inFrame = false;
@@ -209,6 +210,7 @@ class _MjpegStreamState extends State<MjpegStream> {
         _currentFrame!,
         gaplessPlayback: true,
         fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
       );
     }
 
