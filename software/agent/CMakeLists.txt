@@ -23,6 +23,8 @@ target_include_directories(yoozi PRIVATE
 find_package(CURL REQUIRED)
 find_package(ALSA REQUIRED)
 find_package(PkgConfig REQUIRED)
+pkg_check_modules(LWS REQUIRED libwebsockets)
+
 target_link_libraries(yoozi PRIVATE
     CURL::libcurl
     ${ALSA_LIBRARIES}
@@ -30,8 +32,9 @@ target_link_libraries(yoozi PRIVATE
     ftxui::screen
     ftxui::dom
     ftxui::component
+    ${LWS_LIBRARIES}
     pthread
     z
     dl
 )
-target_include_directories(yoozi PRIVATE ${ALSA_INCLUDE_DIRS})
+target_include_directories(yoozi PRIVATE ${ALSA_INCLUDE_DIRS} ${LWS_INCLUDE_DIRS})

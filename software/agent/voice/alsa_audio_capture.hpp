@@ -32,7 +32,7 @@ public:
         , muted_(false)
         , has_utterance_(false)
         , utterance_counter_(0)
-        , vad_(sample_rate, 1500.0f, 15, 30)
+        , vad_(sample_rate, 800.0f, 8, 25)
         , playback_active_(false)
         , playback_complete_(true)
         , cooldown_until_(std::chrono::steady_clock::now()) {}
@@ -217,6 +217,8 @@ private:
         const int chunk = 160;
         std::vector<int16_t> buf(chunk);
         bool was_speaking = false;
+        std::vector<int16_t> audio_to_write;
+        bool need_write = false;
 
         while (running_) {
             int frames = snd_pcm_readi(handle, buf.data(), chunk);
@@ -229,32 +231,44 @@ private:
             if (muted_) continue;
             if (std::chrono::steady_clock::now() < cooldown_until_) continue;
 
-            std::lock_guard<std::mutex> lock(mutex_);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
 
-            vad_.process(buf.data(), frames);
-            ui::UIEventBus::instance().setVadEnergy(vad_.last_energy());
+                vad_.process(buf.data(), frames);
+                ui::UIEventBus::instance().setVadEnergy(vad_.last_energy());
 
-            // LED: user starts speaking → on
-            if (!was_speaking && vad_.is_speaking()) {
-                if (led_) led_->setOn();
-                was_speaking = true;
+                // LED: user starts speaking → on
+                if (!was_speaking && vad_.is_speaking()) {
+                    if (led_) led_->setOn();
+                    was_speaking = true;
+                }
+
+                if (vad_.speech_ended()) {
+                    // LED: user finished speaking → breathing (machine thinking)
+                    if (led_) led_->setBreathing();
+                    was_speaking = false;
+
+                    audio_to_write = vad_.take_buffer();
+                    need_write = true;
+                }
             }
 
-            if (vad_.speech_ended()) {
-                // LED: user finished speaking → breathing (machine thinking)
-                if (led_) led_->setBreathing();
-                was_speaking = false;
-
-                std::vector<int16_t> audio = vad_.take_buffer();
-                if (audio.size() > 6400) {
+            // Write WAV outside the lock to avoid blocking audio capture
+            if (need_write) {
+                need_write = false;
+                if (audio_to_write.size() > 6400) {
                     utterance_counter_++;
                     std::string path = "/tmp/mose_utt_"
                         + std::to_string(utterance_counter_) + ".wav";
-                    write_wav(path, audio, sample_rate_);
-                    pending_wav_ = path;
-                    has_utterance_.store(true);
+                    write_wav(path, audio_to_write, sample_rate_);
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        pending_wav_ = path;
+                        has_utterance_.store(true);
+                    }
                     cv_.notify_one();
                 }
+                audio_to_write.clear();
             }
         }
 

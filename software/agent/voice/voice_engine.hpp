@@ -393,8 +393,10 @@ private:
             text.find("燕子") != std::string::npos ||
             text.find("油子") != std::string::npos ||
             text.find("右子") != std::string::npos ||
-            text.find("有事") != std::string::npos ||
-            text.find("幽子") != std::string::npos) {
+            text.find("幽子") != std::string::npos ||
+            text.find("游子") != std::string::npos ||
+            text.find("釉子") != std::string::npos ||
+            text.find("幼子") != std::string::npos) {
             return true;
         }
 

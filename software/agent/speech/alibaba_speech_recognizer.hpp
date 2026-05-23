@@ -44,6 +44,17 @@ public:
             return result;
         }
 
+        // Detect WAV header and determine actual format + data offset
+        std::string actual_format = format;
+        size_t data_offset = 0;
+        if (audio_data.size() >= 44 &&
+            audio_data[0] == 'R' && audio_data[1] == 'I' &&
+            audio_data[2] == 'F' && audio_data[3] == 'F') {
+            // WAV file detected: SDK only supports pcm/opus/opu, not "wav"
+            actual_format = "pcm";
+            data_offset = 44;  // skip 44-byte RIFF header
+        }
+
         AsrContext ctx;
 
         AlibabaNls::SpeechRecognizerRequest* request =
@@ -63,7 +74,7 @@ public:
         // Set parameters
         request->setAppKey(config_.appkey.c_str());
         request->setToken(config_.token.c_str());
-        request->setFormat(format.c_str());
+        request->setFormat(actual_format.c_str());
         request->setSampleRate(sample_rate);
         request->setPunctuationPrediction(true);
         request->setInverseTextNormalization(true);
@@ -95,9 +106,9 @@ public:
             return result;
         }
 
-        // Send audio data in chunks
+        // Send audio data in chunks (skip WAV header if present)
         const size_t chunk_size = 6400;  // ~200ms of 16kHz 16-bit audio
-        size_t offset = 0;
+        size_t offset = data_offset;
         while (offset < audio_data.size()) {
             size_t len = std::min(chunk_size, audio_data.size() - offset);
             ret = request->sendAudio(audio_data.data() + offset, len);

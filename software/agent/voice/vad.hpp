@@ -93,6 +93,8 @@ public:
         speech_ended_ = false;
         consecutive_speech_ = 0;
         consecutive_silence_ = 0;
+        hp_state_ = 0.0f;
+        hp_prev_ = 0.0f;
     }
 
     float last_energy() const { return last_energy_; }
@@ -100,9 +102,14 @@ public:
 private:
     float calcEnergy(const int16_t* samples, size_t count) {
         float sum = 0;
+        const float alpha = 0.97f;
         for (size_t i = 0; i < count; i++) {
             float s = static_cast<float>(samples[i]) / 32768.0f;
-            sum += s * s;
+            // First-order high-pass filter to remove DC offset and low-freq noise
+            float hp = alpha * (hp_prev_ - s + hp_state_);
+            hp_state_ = hp;
+            hp_prev_ = s;
+            sum += hp * hp;
         }
         float result = sum / count * 10000.0f;
         last_energy_ = result;
@@ -120,6 +127,8 @@ private:
     int frame_size_;
     std::vector<int16_t> buffer_;
     float last_energy_ = 0.0f;
+    float hp_state_ = 0.0f;
+    float hp_prev_ = 0.0f;
     static const int PRE_BUFFER_FRAMES = 15; // 150ms pre-buffer
     std::vector<int16_t> pre_buffer_;
 };

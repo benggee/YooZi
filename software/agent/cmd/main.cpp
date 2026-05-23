@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cstdlib>
+#include <memory>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <libgen.h>
@@ -12,11 +13,14 @@
 #include "tools/camera_tool.hpp"
 #include "tools/speech_to_text_tool.hpp"
 #include "tools/text_to_speech_tool.hpp"
+#include "tools/windows_agent_tool.hpp"
+#include "ws/ws_server.hpp"
 #include "speech/alibaba_config.hpp"
 #include "speech/alibaba_speech_recognizer.hpp"
 #include "speech/alibaba_speech_synthesizer.hpp"
 #include "nlsClient.h"
 #include "camera/pi_camera_capture.hpp"
+#include "camera/http_camera_capture.hpp"
 #include "voice/alsa_audio_capture.hpp"
 #include "voice/voice_engine.hpp"
 #include "voice/led_controller.hpp"
@@ -70,7 +74,15 @@ int main() {
 
     provider::OpenAIProvider llm_provider("glm-5v-turbo");
 
-    camera::PiCameraCapture camera_capture;
+    std::unique_ptr<camera::CameraCapture> camera_capture;
+    const char* cam_url = std::getenv("CAMERA_STREAM_URL");
+    if (cam_url) {
+        camera_capture = std::make_unique<camera::HttpCameraCapture>(cam_url);
+        logger::info("Main", std::string("HTTP camera: ") + cam_url);
+    } else {
+        camera_capture = std::make_unique<camera::PiCameraCapture>();
+        logger::info("Main", "Direct PiCamera capture (fallback)");
+    }
 
     speech::AlibabaConfig alibaba_config;
     bool has_speech = true;
@@ -94,13 +106,23 @@ int main() {
     tools::ReadFileTool read_file_tool(workDir);
     tools::WriteFileTool write_file_tool(workDir);
     tools::BashTool bash_tool(workDir);
-    tools::CameraTool camera_tool(&camera_capture);
+    tools::CameraTool camera_tool(camera_capture.get());
 
     tools::Registry registry;
     registry.registry(&read_file_tool);
     registry.registry(&write_file_tool);
     registry.registry(&bash_tool);
     registry.registry(&camera_tool);
+
+    // WebSocket server for Windows proxy
+    ws::WSServer ws_server(8765);
+    tools::WindowsAgentTool windows_agent_tool(&ws_server);
+    registry.registry(&windows_agent_tool);
+
+    ws_server.onMessage([&windows_agent_tool](const std::string& cid, const std::string& msg) {
+        windows_agent_tool.handleResponse(cid, msg);
+    });
+    ws_server.start();
 
     tools::SpeechToTextTool stt_tool(&asr);
     tools::TextToSpeechTool tts_tool(&tts);
@@ -145,6 +167,7 @@ int main() {
     }
 
     display.stop();
+    ws_server.stop();
     led.stop();
 
     if (nls_client) {
