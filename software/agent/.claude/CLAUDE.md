@@ -1,4 +1,4 @@
-# Mose — 树莓派语音智能助手
+# YooZi — 树莓派语音智能助手
 
 C++11 语音交互 Agent，运行在树莓派上，通过唤醒词激活，支持连续对话、工具调用和语音播报。
 
@@ -90,4 +90,4 @@ cd build && cmake .. && make
 
 ## 仓库
 
-- GitHub：`https://github.com/benggee/moss`（prod 分支）
+- GitHub：`https://github.com/benggee/YooZi`（main 分支）

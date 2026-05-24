@@ -13,8 +13,8 @@ namespace tools {
 class HermesTool : public BaseTool {
 public:
     HermesTool()
-        : webhook_url_("http://192.168.0.107:8644/webhooks/yoozi")
-        , webhook_token_("fz2dOVbpH_mfLqD-Q8oUYQw21d2Wg59R_mewtS1WMTA") {
+        : webhook_url_("http://127.0.0.1:8644/webhooks/yoozi")
+        , webhook_token_("xxxx") {
         const char* url = std::getenv("HERMES_WEBHOOK_URL");
         if (url && url[0] != '\0') {
             webhook_url_ = url;
