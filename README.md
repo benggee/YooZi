@@ -13,6 +13,12 @@
   <img src="assets/installation.JPG" alt="Installation" width="60%" />
 </p>
 
+## Demo Video
+
+[Bilibili](https://www.bilibili.com/video/BV1szGJ6hEdA/)
+
+---
+
 ## System Architecture
 
 YooZi consists of three software components and a 3D-printable enclosure:
